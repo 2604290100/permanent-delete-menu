@@ -25,6 +25,9 @@
     PERMDEL_QUEUE       = 目录      队列目录覆盖
     PERMDEL_LOG         = 文件      日志文件覆盖
     PERMDEL_BIG_FILES   = 整数      大目录阈值（默认 1500）
+    PERMDEL_MEASURE_MS          = 整数   自动统计的时间预算毫秒（默认 700，0 = 不限）
+    PERMDEL_MEASURE_ITEM_LIMIT  = 整数   选中项超过它就直接不统计（默认 300，0 = 不限）
+    PERMDEL_MEASURE_ENTRY_LIMIT = 整数   数到这么多条目就停手（默认 20000，0 = 不限）
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -54,7 +57,17 @@ $MergeWindowMs    = if ($env:PERMDEL_MERGE_MS)     { [int]$env:PERMDEL_MERGE_MS 
 $MergeMaxMs       = if ($env:PERMDEL_MERGE_MAX_MS) { [int]$env:PERMDEL_MERGE_MAX_MS } else { 8000 }
 $BigFileThreshold = if ($env:PERMDEL_BIG_FILES) { [int]$env:PERMDEL_BIG_FILES } else { 1500 }
 $QueueStaleSec    = 60
-$MeasureBudgetMs  = 1500
+
+# ---- 统计（"共多少个文件、合计多大"）的预算与上限 ----
+# 这一段直接决定"右键之后多久能看到确认框"，所以三条都要卡死：
+#   1) 时间预算：自动统计最多花这么多毫秒，超了就报"≥"并停手；
+#   2) 顶层项目数上限：选中项本身就多到爆（例如框选几千项）时，直接**一次都不扫**；
+#   3) 条目数上限：一个大目录里文件成千上万时，数到这么多就停。
+# 命中任何一条 → 确认框里的数字标成"≥"，并在框上出现『统计实际大小』按钮，
+# 用户想精确数字时自己点（那时才做完整统计，期间有进度与停止）。
+$MeasureBudgetMs    = if ($env:PERMDEL_MEASURE_MS)         { [int]$env:PERMDEL_MEASURE_MS }         else { 700 }
+$MeasureItemLimit   = if ($env:PERMDEL_MEASURE_ITEM_LIMIT) { [int]$env:PERMDEL_MEASURE_ITEM_LIMIT } else { 300 }
+$MeasureEntryLimit  = if ($env:PERMDEL_MEASURE_ENTRY_LIMIT){ [int]$env:PERMDEL_MEASURE_ENTRY_LIMIT} else { 20000 }
 $DisplayLimit     = 500
 $LogMaxBytes      = 2097152
 
@@ -64,6 +77,9 @@ $UseUI      = -not $AutoAnswer
 $script:PDStats = @{}
 $script:PDProg  = $null
 $script:PDClock = $null
+$script:PDMeasureCancel = $false       # 『统计实际大小』进行中：用户按了停止
+$script:PDWantClose     = $false       # 统计期间用户按了取消 → 统计停下来后直接关框
+$script:PDMeasuring     = $false       # 是否正在做完整统计（决定取消按钮的语义）
 #endregion
 
 #region ---------------- 日志 ----------------
@@ -265,7 +281,9 @@ function Wait-PDMergeWindow {
             $seen     = $cur
             $deadline = $now + $BaseMs          # 有新请求进来 → 顺延
         }
-        if (-not $uiShown -and $UseUI -and $now -gt 1500) {
+        if (-not $uiShown -and $UseUI -and $now -gt 300) {
+            # 300ms 就冒头：单次右键的等待主要是进程启动 + 合并窗口，
+            # 让用户尽早看到"有反应了"，而不是盯着桌面以为菜单点了没反应。
             Show-PDProgress -Total 0 -Text ('正在汇总选中的项目… 已收到 ' + $seen + ' 项')
             $uiShown = $true
         }
@@ -369,7 +387,9 @@ function Show-PDListDialog {
         [string]$Warning,
         [string[]]$Items,
         [switch]$Confirm,
-        [string]$OkText = '永久删除'
+        [string]$OkText = '永久删除',
+        [scriptblock]$MeasureAction = $null,     # 有则显示『统计实际大小』按钮；点它返回新的摘要文本
+        [string]$MeasureButtonText = '统计实际大小(&M)'
     )
 
     if (-not $UseUI) {
@@ -425,7 +445,12 @@ function Show-PDListDialog {
         $form.Controls.Add($btnCancel)
         $form.CancelButton = $btnCancel
         $form.AcceptButton = $btnCancel        # 回车 = 取消（安全默认）
+        # 关键：这一句必须在 AcceptButton 赋值之后。表单给按钮设 DialogResult 时
+        # 可能被改掉，若取消按钮自己带 OK 语义，"点取消"就变成"确认删除"——不可接受。
+        # 所以这里强制 None，关框与否一律由下面 Add_Click 里的逻辑决定。
+        $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::None
 
+        $btnOk = $null
         if ($Confirm) {
             $btnOk = New-Object System.Windows.Forms.Button
             $btnOk.Text       = $OkText
@@ -436,6 +461,64 @@ function Show-PDListDialog {
         } else {
             $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::OK
         }
+
+        # 『统计实际大小』：只在自动统计没数全（Capped）时才由调用方传进来。
+        # 点一下才做完整统计，期间泵消息保持窗口响应，并可以中途停止。
+        $btnMeasure = $null
+        if ($MeasureAction) {
+            $script:PDMeasuring = $false
+            $btnMeasure = New-Object System.Windows.Forms.Button
+            $btnMeasure.Text     = $MeasureButtonText
+            $btnMeasure.Size     = New-Object System.Drawing.Size(150, 32)
+            $btnMeasure.Location = New-Object System.Drawing.Point(14, 428)
+            $form.Controls.Add($btnMeasure)
+
+            $btnMeasure.Add_Click({
+                if ($script:PDMeasuring) { return }
+                $script:PDMeasuring     = $true
+                $script:PDMeasureCancel = $false
+                $script:PDWantClose     = $false
+                $btnMeasure.Enabled = $false
+                if ($btnOk) { $btnOk.Enabled = $false }     # 统计期间不许确认
+                $btnCancel.Text = '停止统计(&C)'
+                $lbl.Text = '正在统计实际数量与大小…（大目录可能要几秒，可点『停止统计』）'
+                $form.Refresh()
+                [System.Windows.Forms.Application]::DoEvents()
+
+                # 泵：让"统计中"的窗口保持响应；窗口被关掉也当作停止
+                $pump = {
+                    param($files, $dirs)
+                    [System.Windows.Forms.Application]::DoEvents()
+                    $lbl.Text = '正在统计实际数量与大小…  已数到 ' + $files + ' 个文件、' + $dirs + ' 个子文件夹'
+                    if ($form.IsDisposed -or -not $form.Visible) { $script:PDMeasureCancel = $true }
+                }
+
+                $newSummary = $null
+                try { $newSummary = & $MeasureAction $pump } catch { }
+
+                if ($form.IsDisposed) { return }
+                if ($script:PDWantClose) { $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $form.Close(); return }
+                if ($newSummary) { $lbl.Text = $newSummary }
+                if ($script:PDMeasureCancel -and -not $newSummary) { $lbl.Text = '统计已停止（显示的是未完整统计的结果）' }
+                $script:PDMeasuring = $false
+                $btnMeasure.Enabled = $true
+                $btnMeasure.Text    = '重新统计(&M)'
+                if ($btnOk) { $btnOk.Enabled = $true }
+                $btnCancel.Text = if ($Confirm) { '取消(&C)' } else { '关闭(&C)' }
+                $form.Refresh()
+            })
+        }
+
+        # 取消按钮：正常情况直接关框；正在统计时先请求停止，统计退出后再关
+        $btnCancel.Add_Click({
+            if ($script:PDMeasuring) {
+                $script:PDMeasureCancel = $true
+                $script:PDWantClose     = $true
+                return
+            }
+            if ($Confirm) { $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel }
+            $form.Close()
+        })
 
         $form.Add_Shown({ $btnCancel.Focus() })
         $form.Add_HandleCreated({ Force-PDShowWindow -Form $form })
@@ -595,13 +678,32 @@ function Format-PDSize {
     return "$Bytes B"
 }
 
-# 统计数量与体积；有 1.5 秒预算和不进重解析点的保护，避免大目录把确认框卡住
+# 统计数量与体积。**默认是"快速统计"**：有时间预算、顶层项数上限、条目数上限，
+# 命中任何一个就停手并标 Capped —— 目的是让确认框尽快出现（大目录一次都不扫）。
+# 需要精确数字时，由确认框上的『统计实际大小』按钮用 BudgetMs=0 / 上限=0 再算一遍。
 function Measure-PDPaths {
-    param([string[]]$Items, [int]$BudgetMs = 1500)
+    param(
+        [string[]]$Items,
+        [int]$BudgetMs = 700,
+        [int]$ItemLimit = 0,          # 顶层项目数超过它就直接不扫；0 = 不限
+        [int]$EntryLimit = 0,         # 扫到的文件+文件夹总数超过它就停；0 = 不限
+        [scriptblock]$Pump = $null    # 每扫一小批调用一次，让"统计中"的窗口保持响应
+    )
 
     $script:PDStats = @{}
-    $totals = @{ Files = 0; Dirs = 0; Bytes = [long]0; Capped = $false }
+    $totals = @{ Files = 0; Dirs = 0; Bytes = [long]0; Capped = $false; Reason = 'ok' }
     $clock  = [System.Diagnostics.Stopwatch]::StartNew()
+
+    # 顶层项数就超限：连目录都不进，直接给每一项挂一个"未统计"的桩，
+    # 这样删除阶段仍会走更稳的分片删除（与预算耗尽时的行为一致）。
+    if ($ItemLimit -gt 0 -and $Items.Count -gt $ItemLimit) {
+        foreach ($item in $Items) {
+            $script:PDStats[$item] = @{ Files = 0; Dirs = 0; Bytes = [long]0; Capped = $true }
+        }
+        $totals.Capped = $true
+        $totals.Reason = 'items'
+        return $totals
+    }
 
     foreach ($item in $Items) {
         $s = @{ Files = 0; Dirs = 0; Bytes = [long]0; Capped = $false }
@@ -615,8 +717,11 @@ function Measure-PDPaths {
         } elseif ([System.IO.Directory]::Exists($itemExt)) {
             $stack = New-Object 'System.Collections.Generic.Stack[string]'
             $stack.Push($item)
+            $sincePump = 0
             while ($stack.Count -gt 0) {
-                if ($clock.ElapsedMilliseconds -gt $BudgetMs) { $s.Capped = $true; break }
+                if ($BudgetMs -gt 0 -and $clock.ElapsedMilliseconds -gt $BudgetMs) {
+                    $s.Capped = $true; $totals.Reason = 'budget'; break
+                }
                 $cur = $stack.Pop()
                 $di  = $null
                 try { $di = New-Object System.IO.DirectoryInfo (Get-LongPath $cur) } catch { continue }
@@ -624,16 +729,31 @@ function Measure-PDPaths {
                     foreach ($f in $di.EnumerateFiles()) {
                         $s.Files++
                         try { $s.Bytes += $f.Length } catch { }
+                        if ($EntryLimit -gt 0 -and ($s.Files + $s.Dirs) -ge $EntryLimit) {
+                            $s.Capped = $true; $totals.Reason = 'entries'; break
+                        }
                     }
                 } catch { }
+                if ($s.Capped) { break }
                 try {
                     foreach ($d in $di.EnumerateDirectories()) {
                         $s.Dirs++
                         $isLink = $false
                         try { $isLink = (($d.Attributes) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } catch { $isLink = $true }
                         if (-not $isLink) { $stack.Push($d.FullName) }
+                        if ($EntryLimit -gt 0 -and ($s.Files + $s.Dirs) -ge $EntryLimit) {
+                            $s.Capped = $true; $totals.Reason = 'entries'; break
+                        }
                     }
                 } catch { }
+                if ($s.Capped) { break }
+
+                # 长时间统计时保持窗口响应，并允许用户中途停止
+                $sincePump++
+                if ($Pump -and ($sincePump % 64) -eq 0) {
+                    try { & $Pump $s.Files $s.Dirs } catch { }
+                    if ($script:PDMeasureCancel) { $s.Capped = $true; $totals.Reason = 'cancelled'; break }
+                }
             }
         } elseif ([System.IO.File]::Exists($itemExt)) {
             $s.Files = 1
@@ -645,9 +765,37 @@ function Measure-PDPaths {
         $totals.Dirs  += $s.Dirs
         $totals.Bytes += $s.Bytes
         if ($s.Capped) { $totals.Capped = $true }
+        if ($totals.Reason -eq 'cancelled') { break }
     }
 
     return $totals
+}
+
+# 把统计结果拼成给人看的一句话；Capped 时用"≥"并且说明可以点按钮精确统计
+function Format-PDStatLine {
+    param($Stat, [string]$Scope = '其中共')
+    if (-not $Stat) { return '' }
+    $approx = if ($Stat.Capped) { '≥' } else { '约' }
+    $line = "$Scope $approx $($Stat.Files) 个文件、$($Stat.Dirs) 个子文件夹，合计 $approx $(Format-PDSize $Stat.Bytes)"
+    if ($Stat.Capped) { $line = $line + '（未完整统计，可点『统计实际大小』）' }
+    return $line
+}
+
+# 确认框顶部那段摘要（"即将永久删除 N 个项目 …… 合计多大"）
+function Format-PDBatchSummary {
+    param([string[]]$Live, $Stat, [int]$MissingCount = 0)
+
+    $selFiles = 0
+    $selDirs  = 0
+    foreach ($lp in $Live) {
+        if ([System.IO.Directory]::Exists((Get-LongPath $lp))) { $selDirs++ } else { $selFiles++ }
+    }
+    $selText = "$selFiles 个文件"
+    if ($selDirs -gt 0) { $selText = "$selFiles 个文件 + $selDirs 个文件夹" }
+
+    $text = "即将永久删除 $($Live.Count) 个项目（$selText）`r`n" + (Format-PDStatLine -Stat $Stat)
+    if ($MissingCount -gt 0) { $text += "`r`n（其中 $MissingCount 项已不存在，将被跳过）" }
+    return $text
 }
 
 #endregion
@@ -834,8 +982,12 @@ function Invoke-PDBatch {
         return
     }
 
-    # 3) 统计
-    $stat = Measure-PDPaths -Items $live.ToArray() -BudgetMs $MeasureBudgetMs
+    # 3) 快速统计（有时间预算 + 项数/条目数上限，绝不为了数字把确认框拖住）
+    $stat = Measure-PDPaths -Items $live.ToArray() -BudgetMs $MeasureBudgetMs `
+                            -ItemLimit $MeasureItemLimit -EntryLimit $MeasureEntryLimit
+    if ($stat.Capped) {
+        Write-PDLog ("MEASURE capped reason=" + $stat.Reason + " files=" + $stat.Files + " dirs=" + $stat.Dirs + " budget=" + $MeasureBudgetMs + "ms")
+    }
 
     # 4) 确认（一个批次只弹一次）
     $shown = if ($live.Count -gt $DisplayLimit) { $live.ToArray()[0..($DisplayLimit - 1)] } else { $live.ToArray() }
@@ -843,18 +995,21 @@ function Invoke-PDBatch {
     foreach ($s in $shown) { $list.Add($s) }
     if ($live.Count -gt $DisplayLimit) { $list.Add("…… 其余 " + ($live.Count - $DisplayLimit) + " 项未列出") }
 
-    $approx   = if ($stat.Capped) { '≥' } else { '约' }
-    $selFiles = 0
-    $selDirs  = 0
-    foreach ($lp in $live) {
-        if ([System.IO.Directory]::Exists((Get-LongPath $lp))) { $selDirs++ } else { $selFiles++ }
-    }
-    $selText = "$selFiles 个文件"
-    if ($selDirs -gt 0) { $selText = "$selFiles 个文件 + $selDirs 个文件夹" }
-    $summary = "即将永久删除 $($live.Count) 个项目（$selText）`r`n其中共 $($stat.Files) 个文件、$($stat.Dirs) 个子文件夹，合计 $approx $(Format-PDSize $stat.Bytes)"
-    if ($missing.Count -gt 0) { $summary += "`r`n（其中 $($missing.Count) 项已不存在，将被跳过）" }
+    $summary = Format-PDBatchSummary -Live $live.ToArray() -Stat $stat -MissingCount $missing.Count
 
-    $ok = Show-PDListDialog -Title '永久删除（不进回收站）' -Summary $summary -Warning '此操作不经过回收站，删除后无法恢复！' -Items $list.ToArray() -Confirm -OkText '永久删除'
+    # 自动统计没数全时，框上给一个『统计实际大小』按钮：点它才做完整统计
+    $measureAction = $null
+    if ($stat.Capped) {
+        $measureAction = {
+            param($pump)
+            $full = Measure-PDPaths -Items $live.ToArray() -BudgetMs 0 -ItemLimit 0 -EntryLimit 0 -Pump $pump
+            if ($script:PDMeasureCancel) { $full.Capped = $true }   # 中途停止：只报已数到的部分
+            Write-PDLog ("MEASURE full files=" + $full.Files + " dirs=" + $full.Dirs + " bytes=" + $full.Bytes + " cancelled=" + $script:PDMeasureCancel)
+            return (Format-PDBatchSummary -Live $live.ToArray() -Stat $full -MissingCount 0)
+        }
+    }
+
+    $ok = Show-PDListDialog -Title '永久删除（不进回收站）' -Summary $summary -Warning '此操作不经过回收站，删除后无法恢复！' -Items $list.ToArray() -Confirm -OkText '永久删除' -MeasureAction $measureAction
     $answer = 'no'
     if ($ok) { $answer = 'yes' }
     Write-PDLog ("CONFIRM " + $answer + " n=" + $live.Count + " files=" + $stat.Files + " bytes=" + $stat.Bytes)

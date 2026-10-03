@@ -36,7 +36,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 # 3) 跑测试（管理员 PowerShell）
 powershell -File tests\Test-SetupExe.ps1            # 49 项
-powershell -File tests\Test-Engine-Regression.ps1   # 56 项
+powershell -File tests\Test-Engine-Regression.ps1   # 67 项
 powershell -File tests\Test-Engine-E2E.ps1          # 11 项（会短暂弹真实确认框）
 ```
 
@@ -104,7 +104,7 @@ $b = [System.IO.File]::ReadAllBytes('engine\PermanentDelete.ps1')
 
 ## 5. 测试要求
 
-**提交前必须全绿**（编码检查 + 116 项）。一条命令跑全套（顺序：编码检查 → 安装器 → 引擎回归 → 端到端）：
+**提交前必须全绿**（编码检查 + 127 项）。一条命令跑全套（顺序：编码检查 → 安装器 → 引擎回归 → 端到端）：
 
 ```powershell
 # 需要管理员 PowerShell
@@ -125,7 +125,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Test-Encoding.ps1
 | 测试 | 项数 | 前置条件 | 说明 |
 | --- | --- | --- | --- |
 | `tests\Test-SetupExe.ps1` | 49 | 管理员 | 会**真的安装/卸载**，最后把现场恢复成"已安装可用"。会校验部署的引擎文件与工程源码**字节一致**（含 BOM/ASCII 红线） |
-| `tests\Test-Engine-Regression.ps1` | 56 | 管理员 + **先 `install` 一次** | 被测对象是 `%LOCALAPPDATA%\PermanentDelete.ps1`（部署后的副本）；用 `PERMDEL_AUTOCONFIRM` 跳过 UI；全部在 `%TEMP%` 沙箱内 |
+| `tests\Test-Engine-Regression.ps1` | 67 | 管理员 + **先 `install` 一次** | 被测对象是 `%LOCALAPPDATA%\PermanentDelete.ps1`（部署后的副本）；用 `PERMDEL_AUTOCONFIRM` 跳过 UI；全部在 `%TEMP%` 沙箱内 |
 | `tests\Test-Engine-E2E.ps1` | 11 | 管理员 + **交互式桌面** | 走真实 Shell 动词（`FolderItemVerb.DoIt()`），会短暂弹出真实确认框。**无人会话/CI 上跑不了** |
 
 写测试时的两条经验（别重复踩）：
@@ -169,7 +169,7 @@ fix: 单个文件右键不再被误当成参数文件删除
 脚本于是把一个普通文件当参数文件读掉并删除，绕过了确认框。
 做法：脚本头加 [CmdletBinding(PositionalBinding = $false)]，
       并把参数文件限制为 %TEMP%\permdelete_args_*.pdl 白名单。
-验证：Test-Engine-Regression T01/T14/T15 通过；116 项全绿。
+验证：Test-Engine-Regression T01/T14/T15 通过；127 项全绿。
 ```
 
 常用类型：`feat` / `fix` / `docs` / `test` / `refactor` / `build` / `chore`。

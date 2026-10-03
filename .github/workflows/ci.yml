@@ -8,7 +8,7 @@
 #      （build.ps1 用系统自带的 csc.exe，GitHub 的 windows runner 自带 .NET Framework 4.x，
 #        因此不需要 .NET SDK）
 #   3) 安装器测试 tests\Test-SetupExe.ps1（49 项）
-#   4) 引擎回归测试 tests\Test-Engine-Regression.ps1（56 项）
+#   4) 引擎回归测试 tests\Test-Engine-Regression.ps1（67 项）
 #
 # 为什么 3) 必须排在 4) 前面：
 #   引擎回归测试的被测对象是"部署后"的脚本 —— %LOCALAPPDATA%\PermanentDelete.ps1 与
@@ -106,7 +106,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-SetupExe.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: 引擎回归测试（56 项）
+      - name: 引擎回归测试（67 项）
         # 被测对象是上一步部署到 %LOCALAPPDATA% 的脚本，所以不能调到安装器测试前面。
         # 测试用 PERMDEL_AUTOCONFIRM 跳过确认框，全部在 %TEMP% 沙箱目录里进行。
         run: |

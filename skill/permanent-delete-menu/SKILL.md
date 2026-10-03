@@ -18,7 +18,7 @@ description: Use when working on the "永久删除（不进回收站）" Windows
   engine\launch_perm_delete.vbs  引擎启动器（也内嵌进 exe）
   tests\Test-All.ps1             一条命令跑完全部测试
   tests\Test-SetupExe.ps1        安装器测试 49 项
-  tests\Test-Engine-Regression.ps1 引擎回归 56 项
+  tests\Test-Engine-Regression.ps1 引擎回归 67 项
   tests\Test-Engine-E2E.ps1      真实 Shell 端到端 11 项（会短暂弹真实确认框）
   tools\Test-Encoding.ps1        编码红线检查（本地与 CI 共用）
 ```
@@ -105,6 +105,17 @@ powershell -File <项目根>\tests\Test-Engine-E2E.ps1
   并有看门狗，1.6 秒仍不可见就退回系统 MessageBox。
 - 队列的残留判据是**互斥体**，不是文件时间戳：抢到互斥体 ⇒ 无活实例 ⇒ 启动清残留；此后入队的
   条目一律采纳（这样用户在确认框上停留很久也不会丢请求）。
+- **统计必须是"快速统计"**：`Measure-PDPaths` 默认只给 700ms 预算，且选中项 > 300 个时**一次都不扫**、
+  数到 20000 个条目就停手 —— 命中任一条就标 `Capped`，确认框里的数字退化成 `≥` 并多出
+  『统计实际大小』按钮（`Show-PDListDialog -MeasureAction`，点了才做完整统计）。
+  这条是**延迟红线**：曾经用固定 1.5 秒预算先扫完再弹框，大目录下右键要等很久。
+  三个上限分别由 `PERMDEL_MEASURE_MS` / `_ITEM_LIMIT` / `_ENTRY_LIMIT` 覆盖（0 = 不限）。
+- **确认框的取消按钮语义是显式控制的**：`$form.AcceptButton = $btnCancel` 之后必须紧跟
+  `$btnCancel.DialogResult = None`（表单给按钮设 DialogResult 可能覆盖它）。若取消按钮带上
+  `OK` 语义，"点取消"就会变成"确认删除" —— 数据丢失级。改对话框时务必保住这两行，
+  并跑一遍"点取消后文件还在"的验证。
+- **GUI 的活不能在 UI 线程上干**：提权子进程（`RunElevatedQuiet`）、部署、`ShellVerify.Check`
+  的 COM 枚举都要走 `MainForm.RunBusy`（线程池 + 完成后 `BeginInvoke`），否则点按钮就假死。
 
 ## 加新功能的惯例
 

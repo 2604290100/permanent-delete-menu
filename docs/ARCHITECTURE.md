@@ -69,7 +69,7 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA ^
       │         · 抢到了 → 清残留队列 → 自己的路径入队（日志 PRIMARY）→ 记活实例
       ├─ 4  Wait-PDMergeWindow   自适应合并窗口：每来一个新请求就顺延，硬上限 8 秒
       ├─ 5  Read-PDQueueEntries  取出队列 → 日志 BATCH n=… → Get-TopLevelPaths 折叠嵌套项
-      ├─ 6  Measure-PDPaths      统计文件数/体积（1.5 秒预算，超预算标记 Capped）
+      ├─ 6  Measure-PDPaths      统计文件数/体积（快速：700ms 预算 + 项数/条目数上限；超限标 Capped）
       ├─ 7  Show-PDListDialog    一个批次只弹一次确认框（默认按钮 = 取消）
       └─ 8  Remove-PDItem × N    原生递归删除 → 失败则回落自底向上遍历（DELETED / FAILED）
                                  删除过程中每 64 个文件泵一次消息，超过 1.2 秒弹进度框
@@ -91,7 +91,7 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA ^
 2. **可审计性。** 一个"不经过回收站、直接删文件"的工具，用户有权在动手前读完它到底做什么。
    两个纯文本脚本（约 1000 行 PowerShell + 80 行 VBS）可以直接打开看；
    同样的逻辑编译进 exe 就只能信任发布者。
-3. **不重写已验证的东西。** 引擎已有 116 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
+3. **不重写已验证的东西。** 引擎已有 127 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
    重写合并逻辑、删除引擎和全部 UI 细节并重新验证一遍，收益只有"少两个文件"。
 
 代价（如实记录）：引擎脚本必然落在用户可写目录，存在被同机同用户进程篡改的可能。
@@ -147,8 +147,9 @@ HKLM\SOFTWARE\Classes\AllFilesystemObjects\shell\PermanentDelete
 
 - 队列条目是一个小文件：先写 `<guid>.tmp` 再 `Move` 成 `<guid>.arg`（原子改名，避免读到半成品）。
 - **窗口是自适应的**：起始等 700 ms，每发现一个新条目就把截止时间顺延 700 ms，硬上限 8 秒
-  （`PERMDEL_MERGE_MS` / `PERMDEL_MERGE_MAX_MS` 可覆盖）。等待超过 1.5 秒会先弹一个
-  "正在汇总选中的项目…"的进度框，避免用户以为卡死。
+  （`PERMDEL_MERGE_MS` / `PERMDEL_MERGE_MAX_MS` 可覆盖）。等待超过 **300 ms** 就会先弹一个
+  "正在汇总选中的项目…"的进度框，避免用户以为卡死（单次右键的等待主要来自进程启动 +
+  这个合并窗口，早点冒出反馈比让用户盯着桌面强）。
 - **不这么做会怎样**：① 用固定窗口（比如"等 700ms 就动手"），一次选几十项时后面的调用还在路上，
   会分成好几批 → 又是多个确认框；② 不做合并，36 个进程会弹 36 个框、删 36 次。
 - **残留判据用互斥体，不用时间戳**（`Clear-PDQueue`）：能抢到互斥体 ⇒ 当前没有活着的实例
@@ -255,7 +256,9 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 | 参数文件白名单 | 主流程 `$ArgsFile` 分支 | 只接受 `%TEMP%\permdelete_args_*.pdl`；其余一律忽略并记 `ARGSFILE ignored=`。**绝不把用户选中的普通文件当成参数文件读取或删除** |
 | 禁止位置参数误绑定 | 脚本头 `[CmdletBinding(PositionalBinding = $false)]` | 否则第一个路径会被绑到 `$ArgsFile` 上——曾经因此"只选一个文件时绕过确认框直接删" |
 | 删除前备份注册表 | `MenuRegistry.BackupKey` | 卸载/清理历史项前 `reg.exe export` 到 `%LOCALAPPDATA%\PermanentDelete\backup-<时间戳>-<键名>.reg` |
-| 统计有预算 | `Measure-PDPaths` | 1.5 秒预算，超时记 `Capped`，体积显示退化成 `≥`，绝不为了"算准体积"把确认框卡死 |
+| 统计有预算、有上限 | `Measure-PDPaths` | 自动统计是"快速统计"：**700 ms 预算**、**选中项 > 300 个就直接一次都不扫**、**数到 20000 个条目就停手**。命中任一条就记 `Capped`，数字显示退化成 `≥`，绝不为了"算准体积"把确认框卡死 |
+| 大数字按需精确统计 | `Show-PDListDialog -MeasureAction` | `Capped` 时确认框上多一个『统计实际大小』按钮：点了才做完整统计（`BudgetMs=0`、上限=0），期间泵消息保持响应、可『停止统计』，按钮随后变成『重新统计』 |
+| 确认按钮语义显式化 | `Show-PDListDialog` | 取消按钮的 `DialogResult` 被强制成 `None`（且必须在 `AcceptButton` 赋值**之后**），关框与否全部由代码判定 —— 否则"点取消"有变成"确认删除"的风险；统计进行中取消按钮的含义临时变成『停止统计』 |
 | 大目录分片 + 消息泵 | `Remove-PDSharded`、`Pump-PD` | 直接子项多（>1500 文件 / 超过 2 GB / 统计被截断）时逐个子项删除，两个子项之间泵消息；删除超过 1.2 秒弹进度框 |
 | 失败不尝试提权/解锁 | `Remove-PDItem` 的返回值 | ACL 拒绝或被独占只报 `FAILED`，弹一个"部分失败"列表，不会偷偷提权或强拆句柄 |
 
@@ -283,7 +286,7 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 powershell -File tests\Test-All.ps1                 # 一条命令跑全套（编码检查 + 三套测试，见下）
 powershell -File tools\Test-Encoding.ps1            # 只跑编码红线检查（BOM / 纯 ASCII / 无个人路径）
 powershell -File tests\Test-SetupExe.ps1            # 49 项：安装器（会真的装/卸，最后恢复现场）
-powershell -File tests\Test-Engine-Regression.ps1   # 56 项：引擎（被测对象是「已部署」的脚本）
+powershell -File tests\Test-Engine-Regression.ps1   # 67 项：引擎（被测对象是「已部署」的脚本）
 powershell -File tests\Test-Engine-E2E.ps1          # 11 项：真实 Shell 动词（会短暂弹出真实确认框）
 ```
 

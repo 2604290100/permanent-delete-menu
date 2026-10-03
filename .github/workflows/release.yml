@@ -4,7 +4,7 @@
 # 触发：推送 v* 标签（例如 v1.0.0）
 #
 # 发布前先过一遍闸门，任何一步失败都不会创建 Release（避免放出去一个没过测试的版本）：
-#   编码红线检查 → 编译 + 打包 → 安装器测试（49 项）→ 引擎回归测试（56 项）
+#   编码红线检查 → 编译 + 打包 → 安装器测试（49 项）→ 引擎回归测试（67 项）
 # 端到端测试（11 项）不在这里跑：它需要交互式桌面会话，在 ci.yml 里也是可选的。
 #
 # 会产出三个附件：
@@ -72,7 +72,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-SetupExe.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: 引擎回归测试（56 项）
+      - name: 引擎回归测试（67 项）
         # 必须排在安装器测试之后：被测的是 %LOCALAPPDATA% 下已部署的脚本
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Engine-Regression.ps1

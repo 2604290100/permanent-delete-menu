@@ -91,6 +91,10 @@ function Reset-State {
     $env:PERMDEL_BIG_FILES = '1500'
     $env:PERMDEL_AUTOCONFIRM = 'yes'
     $env:PERMDEL_ARGSFILE_THRESHOLD = ''
+    # 统计上限也要复位，否则会串到下一个用例（空字符串 = 用引擎默认值）
+    $env:PERMDEL_MEASURE_MS = ''
+    $env:PERMDEL_MEASURE_ITEM_LIMIT = ''
+    $env:PERMDEL_MEASURE_ENTRY_LIMIT = ''
 }
 
 function New-Dir {
@@ -469,6 +473,50 @@ Check 'T18 三个文件都删掉了' (@(@($fa, $fb, $fc) | Where-Object { Test-P
 Check 'T18 只形成一个批次' ($batches -eq 1) ("BATCH 次数=" + $batches)
 Check 'T18 只弹一次确认框' ($confirms -eq 1) ("CONFIRM 次数=" + $confirms)
 Check 'T18 批次含 3 项' ($logText -match 'BATCH n=3')
+
+# ---------------------------------------------------------------- T19  ★回归
+# 大选择绝不允许"先把整棵树扫一遍再弹框" —— 那正是"右键半天不出确认框"的元凶。
+Write-Host 'T19 ★选中项太多时直接不统计（确认框立刻出现，数字标成"≥"）'
+Reset-State
+$env:PERMDEL_MEASURE_ITEM_LIMIT = '1'      # 2 个目标 > 上限 1 → 一次都不该扫
+$d  = New-Dir 't19'
+$f1 = Join-Path $d 'a.txt'; [System.IO.File]::WriteAllText($f1, 'x')
+$f2 = Join-Path $d 'b.txt'; [System.IO.File]::WriteAllText($f2, 'x')
+$h1 = Start-PD -Targets @($f1, $f2) -Tag 't19' -ExpectSeconds 90
+$null = Wait-PD -Handle $h1
+$logText = Read-LogText
+Check 'T19 日志标明因项数超限而未统计' ($logText -match 'MEASURE capped reason=items') '（没有这行说明仍在扫描）'
+Check 'T19 确认框里的数字标成 ≥' ($logText -match '≥ 0 个文件') '（应为 ≥ 0：没扫就报 0）'
+Check 'T19 确认框提示可点按钮精确统计' ($logText -match '未完整统计')
+Check 'T19 两个文件仍被正常删除' ((@(@($f1, $f2) | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0))
+
+# ---------------------------------------------------------------- T20  ★回归
+Write-Host 'T20 ★目录里文件太多时统计到上限就停手'
+Reset-State
+$env:PERMDEL_MEASURE_ENTRY_LIMIT = '5'     # 扫到 5 个条目就停
+$d   = New-Dir 't20'
+$sub = Join-Path $d 'big'
+[void][System.IO.Directory]::CreateDirectory($sub)
+for ($i = 1; $i -le 20; $i++) { [System.IO.File]::WriteAllText((Join-Path $sub ("f$i.txt")), 'x') }
+$h1 = Start-PD -Targets @($sub) -Tag 't20' -ExpectSeconds 90
+$null = Wait-PD -Handle $h1
+$logText = Read-LogText
+Check 'T20 日志标明因条目数超限而停手' ($logText -match 'MEASURE capped reason=entries')
+Check 'T20 统计确实停在上限附近（不是数完 20 个）' ($logText -match '≥ 5 个文件')
+Check 'T20 大目录仍被完整删除' (-not (Test-Path -LiteralPath $sub))
+
+# ---------------------------------------------------------------- T21  ★回归
+Write-Host 'T21 ★小选择仍然给精确数字（不能因为上面的改动把常规体验搞坏）'
+Reset-State
+$d  = New-Dir 't21'
+$f1 = Join-Path $d 'only.txt'; [System.IO.File]::WriteAllText($f1, 'hello')
+$h1 = Start-PD -Targets @($f1) -Tag 't21' -ExpectSeconds 90
+$null = Wait-PD -Handle $h1
+$logText = Read-LogText
+Check 'T21 没有出现 capped' (-not ($logText -match 'MEASURE capped'))
+Check 'T21 数字是精确的"约"' ($logText -match '约 1 个文件')
+Check 'T21 不提示"未完整统计"' (-not ($logText -match '未完整统计'))
+Check 'T21 文件被删除' (-not (Test-Path -LiteralPath $f1))
 
 # ---------------------------------------------------------------- 汇总
 $fail = @($script:Results | Where-Object { -not $_.Ok })

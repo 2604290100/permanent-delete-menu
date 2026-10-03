@@ -130,11 +130,9 @@ if ($Package) {
     Copy-Item (Join-Path $root 'assets\*') (Join-Path $stage 'assets') -Force
     Copy-Item (Join-Path $root 'tests\*') (Join-Path $stage 'tests') -Force
     Copy-Item (Join-Path $root 'docs\*') (Join-Path $stage 'docs') -Force -ErrorAction SilentlyContinue
-    if ($skillSrc) {
-        $skillDst = Join-Path $stage ('skill\' + $skillName)
-        [void][System.IO.Directory]::CreateDirectory($skillDst)
-        Copy-Item (Join-Path $skillSrc '*') $skillDst -Force -ErrorAction SilentlyContinue
-    }
+    # 注意：这里**不打包 skill\**。发布包是给最终用户下载的（源码 + 引擎 + 测试 + 文档），
+    # DSH skill 是给"用 AI 改这个项目"的人看的，塞进发布包里既没用也容易让人误解。
+    # skill 本体留在仓库的 skill\ 目录里，位置见 README 的仓库结构。
     $zip = Join-Path $binDir 'PermanentDeleteSetup-package.zip'
     if (Test-Path $zip) { Remove-Item $zip -Force }
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip

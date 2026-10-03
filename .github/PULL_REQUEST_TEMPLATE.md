@@ -18,7 +18,7 @@
 <!-- 至少贴一下测试的汇总行（形如「合计 49 项，通过 49，失败 0」），并说明跑的机器环境。 -->
 
 - [ ] 已在本机跑 `tests\Test-SetupExe.ps1`（49 项，安装器 / 注册表 / 编码红线）
-- [ ] 已在本机跑 `tests\Test-Engine-Regression.ps1`（56 项，引擎回归，需要先装一次让引擎部署到 `%LOCALAPPDATA%`）
+- [ ] 已在本机跑 `tests\Test-Engine-Regression.ps1`（67 项，引擎回归，需要先装一次让引擎部署到 `%LOCALAPPDATA%`）
 - [ ] 改过 `engine\` 的话，已在本机跑 `tests\Test-Engine-E2E.ps1`（11 项，**需要交互式桌面**，会短暂弹出真实的确认框）
 - [ ] 贴了测试汇总行：
 
