@@ -44,7 +44,11 @@ namespace PDSetup
 
         public MainForm()
         {
-            Text = "永久删除 · 右键菜单管理";
+            // 标题带上版本号：用户报问题时能一句话说清自己跑的是哪一版
+            string ver = Application.ProductVersion;   // 形如 1.0.0.0
+            string[] parts = ver.Split('.');
+            if (parts.Length >= 3) { ver = parts[0] + "." + parts[1] + "." + parts[2]; }
+            Text = "永久删除 · 右键菜单管理  v" + ver;
             ClientSize = new Size(760, 580);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -255,13 +259,16 @@ namespace PDSetup
             _lblEngine.ForeColor = s.EngineOk ? Color.FromArgb(0, 100, 0) : Color.FromArgb(180, 0, 0);
 
             _lblRegistry.Text = "注册表：" + (s.Menu.Installed ? "已安装  " + AppPaths.VerbHklmDisplay : "未安装")
-                + (s.Menu.StaleKeys.Count > 0 ? "   ⚠ 存在历史注册项 " + s.Menu.StaleKeys.Count + " 个" : "");
+                + (s.Menu.StaleKeys.Count > 0 ? "（注意：还有 " + s.Menu.StaleKeys.Count + " 个历史注册项）" : "");
             _lblRegistry.ForeColor = s.Menu.Installed ? Color.FromArgb(0, 100, 0) : Color.FromArgb(120, 120, 120);
 
             VisibilityResult v = s.Visible;
+            // 注意：这些状态文字全部用中文/ASCII 写，**不要用 ✓ ⚠ → 这类符号**。
+            // 微软雅黑没有 ✓(U+2713) 的字形，实测在界面上渲染成空白，
+            // 看起来就是"文字缺了一块"——和按钮被裁字的观感一样糟。
             if (v.Visible)
             {
-                _lblVisible.Text = "菜单可见性：文件 ✓  文件夹 ✓";
+                _lblVisible.Text = "菜单可见性：正常（文件、文件夹右键里都能看到）";
                 _lblVisible.ForeColor = Color.FromArgb(0, 100, 0);
             }
             else if (s.ExtendedOnly && s.Menu.Installed)
@@ -272,13 +279,13 @@ namespace PDSetup
             }
             else
             {
-                _lblVisible.Text = "菜单可见性：" + v.Detail;
+                _lblVisible.Text = "菜单可见性：看不到（" + v.Detail + "）";
                 _lblVisible.ForeColor = v.Ok ? Color.FromArgb(0, 100, 0) : Color.FromArgb(180, 0, 0);
             }
 
             _lblFlags.Text = s.Menu.HideFlags.Count == 0
                 ? "隐藏标志：无"
-                : "隐藏标志：" + string.Join(" / ", s.Menu.HideFlags.ToArray()) + "   → 菜单会看不到，点『添加 / 修复』清除";
+                : "隐藏标志：" + string.Join(" / ", s.Menu.HideFlags.ToArray()) + "（菜单会看不到，点『添加 / 修复』清除）";
             _lblFlags.ForeColor = s.Menu.HideFlags.Count == 0 ? Color.FromArgb(0, 100, 0) : Color.FromArgb(180, 0, 0);
 
             _txtLog.Text = s.LogTail;
