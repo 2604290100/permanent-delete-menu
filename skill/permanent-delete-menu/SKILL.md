@@ -17,7 +17,7 @@ description: Use when working on the "永久删除（不进回收站）" Windows
   engine\PermanentDelete.ps1     引擎主脚本（也内嵌进 exe）
   engine\launch_perm_delete.vbs  引擎启动器（也内嵌进 exe）
   tests\Test-All.ps1             一条命令跑完全部测试
-  tests\Test-SetupExe.ps1        安装器测试 47 项
+  tests\Test-SetupExe.ps1        安装器测试 49 项
   tests\Test-Engine-Regression.ps1 引擎回归 56 项
   tests\Test-Engine-E2E.ps1      真实 Shell 端到端 11 项（会短暂弹真实确认框）
   tools\Test-Encoding.ps1        编码红线检查（本地与 CI 共用）

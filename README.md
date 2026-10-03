@@ -163,7 +163,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Package    # 额外打一个
 
 ## 测试
 
-共 **114 项**，一条命令跑完全部（编码检查 → 安装器 → 引擎回归 → 端到端）：
+共 **116 项**，一条命令跑完全部（编码检查 → 安装器 → 引擎回归 → 端到端）：
 
 ```powershell
 # 需要管理员 PowerShell

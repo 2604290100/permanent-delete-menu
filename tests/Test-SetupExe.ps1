@@ -103,12 +103,23 @@ Check 'T01 帮助含 install/uninstall/status' (($r.Out -match 'install') -and (
 # ---------------------------------------------------------------- T02
 Write-Host 'T02 状态输出可解析'
 $m = Get-StatusMap
-Check 'T02 status 退出码 0' ($m['__exit'] -eq 0) ('exit=' + $m['__exit'])
+# status 的退出码本身是有语义的：0 = 已安装，1 = 未安装。
+# 所以这里比对"退出码与 installed 是否自洽"，而不是写死 0 ——
+# 干净机器（例如 CI runner）上开局就是未安装，写死 0 会误报。
+$expectedStatusExit = 0
+if ($m['installed'] -eq 'false') { $expectedStatusExit = 1 }
+Check 'T02 status 退出码与安装状态自洽' ($m['__exit'] -eq $expectedStatusExit) ('exit=' + $m['__exit'] + ' installed=' + $m['installed'])
 Check 'T02 含关键字段' ($m.ContainsKey('installed') -and $m.ContainsKey('engineDeployed') -and $m.ContainsKey('fileVisible') -and $m.ContainsKey('folderVisible') -and $m.ContainsKey('command'))
 Check 'T02 未安装时不应有历史残留' ($m['staleKeys'] -eq '') ('staleKeys=' + $m['staleKeys'])
 
 # ---------------------------------------------------------------- T03
 Write-Host 'T03 卸载'
+# 先确保处于"已安装"状态：干净机器上从没装过的话，下面的"卸载后引擎脚本保留"
+# 根本无从验证（文件本来就不存在），CI 上就是这么挂的。
+$pre = Invoke-Setup -ArgLine 'install --quiet --no-extended'
+Check 'T03 前置安装成功（保证卸载有东西可卸）' ($pre.Code -eq 0) ('exit=' + $pre.Code)
+Check 'T03 前置安装后引擎脚本已部署' (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'PermanentDelete.ps1'))
+
 $r = Invoke-Setup -ArgLine 'uninstall --quiet'
 Check 'T03 卸载退出码 0' ($r.Code -eq 0) ('exit=' + $r.Code + ' ' + $r.Err.Trim())
 $k = Get-VerbKey

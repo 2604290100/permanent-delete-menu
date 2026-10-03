@@ -7,7 +7,7 @@
 #   2) 编译 bin\PermanentDeleteSetup.exe 并打 bin\PermanentDeleteSetup-package.zip
 #      （build.ps1 用系统自带的 csc.exe，GitHub 的 windows runner 自带 .NET Framework 4.x，
 #        因此不需要 .NET SDK）
-#   3) 安装器测试 tests\Test-SetupExe.ps1（47 项）
+#   3) 安装器测试 tests\Test-SetupExe.ps1（49 项）
 #   4) 引擎回归测试 tests\Test-Engine-Regression.ps1（56 项）
 #
 # 为什么 3) 必须排在 4) 前面：
@@ -98,7 +98,7 @@ jobs:
           Get-Item bin\PermanentDeleteSetup.exe, bin\PermanentDeleteSetup-package.zip |
             Select-Object Name, Length
 
-      - name: 安装器测试（47 项）
+      - name: 安装器测试（49 项）
         # 会真的把「永久删除（不进回收站）」动词写进 HKLM\SOFTWARE\Classes 再卸载掉，
         # 需要管理员权限；GitHub 的 windows runner 默认就是管理员会话，直接跑即可。
         # 脚本结尾（T11）会重新安装一次，把现场恢复成可用状态，同时留下部署好的引擎脚本。

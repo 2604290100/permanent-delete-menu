@@ -91,7 +91,7 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA ^
 2. **可审计性。** 一个"不经过回收站、直接删文件"的工具，用户有权在动手前读完它到底做什么。
    两个纯文本脚本（约 1000 行 PowerShell + 80 行 VBS）可以直接打开看；
    同样的逻辑编译进 exe 就只能信任发布者。
-3. **不重写已验证的东西。** 引擎已有 114 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
+3. **不重写已验证的东西。** 引擎已有 116 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
    重写合并逻辑、删除引擎和全部 UI 细节并重新验证一遍，收益只有"少两个文件"。
 
 代价（如实记录）：引擎脚本必然落在用户可写目录，存在被同机同用户进程篡改的可能。
@@ -282,7 +282,7 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 ```powershell
 powershell -File tests\Test-All.ps1                 # 一条命令跑全套（编码检查 + 三套测试，见下）
 powershell -File tools\Test-Encoding.ps1            # 只跑编码红线检查（BOM / 纯 ASCII / 无个人路径）
-powershell -File tests\Test-SetupExe.ps1            # 47 项：安装器（会真的装/卸，最后恢复现场）
+powershell -File tests\Test-SetupExe.ps1            # 49 项：安装器（会真的装/卸，最后恢复现场）
 powershell -File tests\Test-Engine-Regression.ps1   # 56 项：引擎（被测对象是「已部署」的脚本）
 powershell -File tests\Test-Engine-E2E.ps1          # 11 项：真实 Shell 动词（会短暂弹出真实确认框）
 ```
