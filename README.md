@@ -2,14 +2,14 @@
 
 `permanent-delete-menu` · 给 Windows 资源管理器加一个「永久删除（不进回收站）」右键菜单项：**一键添加、一键移除**，多选也只弹一个确认框。
 
+[![CI](https://github.com/2604290100/permanent-delete-menu/actions/workflows/ci.yml/badge.svg)](https://github.com/2604290100/permanent-delete-menu/actions/workflows/ci.yml)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Platform: Windows 10 / 11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)](#下载与安装)
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE.svg)](docs/ARCHITECTURE.md)
 [![dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#从源码构建)
 
-<!-- CI 还没在 GitHub Actions 上跑过，先不放构建徽章（不放假的）。第一次 CI 变绿后取消下面这行的注释：
-     [![CI](https://github.com/2604290100/permanent-delete-menu/actions/workflows/ci.yml/badge.svg)](https://github.com/2604290100/permanent-delete-menu/actions/workflows/ci.yml)
--->
+<!-- CI 只跑编码检查 + 安装器 49 项 + 引擎回归 56 项；端到端 11 项需要交互式桌面，
+     默认不跑（workflow_dispatch 的 run_e2e 开关，且只在自托管 runner 上才可能通过）。 -->
 
 ---
 
