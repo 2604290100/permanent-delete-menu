@@ -1,0 +1,159 @@
+# ============================================================================
+# 永久删除 · 右键菜单管理器 —— 持续集成（CI）
+#
+# 按顺序做四件事：
+#   1) 编码红线检查 tools\Test-Encoding.ps1（BOM / 纯 ASCII）——故意放在编译之前，
+#      编码问题是"静默毁功能"级别的，先拦掉再谈编译。
+#   2) 编译 bin\PermanentDeleteSetup.exe 并打 bin\PermanentDeleteSetup-package.zip
+#      （build.ps1 用系统自带的 csc.exe，GitHub 的 windows runner 自带 .NET Framework 4.x，
+#        因此不需要 .NET SDK）
+#   3) 安装器测试 tests\Test-SetupExe.ps1（47 项）
+#   4) 引擎回归测试 tests\Test-Engine-Regression.ps1（56 项）
+#
+# 为什么 3) 必须排在 4) 前面：
+#   引擎回归测试的被测对象是"部署后"的脚本 —— %LOCALAPPDATA%\PermanentDelete.ps1 与
+#   %LOCALAPPDATA%\launch_perm_delete.vbs，脚本找不到就直接 throw。这两个文件是安装器
+#   部署出来的，而安装器测试在结尾（T11）会把现场恢复成"已正确安装"，正好把部署物留下。
+#
+# 为什么刻意不跑 tests\Test-Engine-E2E.ps1（11 项）：
+#   它要真实弹确认框、用 Shell.Application 枚举真实的右键菜单、还要截屏和取窗口句柄，
+#   GitHub 托管的 runner 是无交互会话，跑必然失败。要跑请用 workflow_dispatch 打开
+#   run_e2e 开关（默认关），并且换成带交互式桌面的自托管 runner。
+#
+# 权限：本 workflow 只读仓库，不写任何东西，所以 contents: read 就够。
+#
+# ----------------------------------------------------------------------------
+# workflow 自己的两条编码纪律（和引擎脚本那两条红线是同一类道理）
+#
+# 纪律一：本文件保存为 UTF-8 **不带 BOM**、LF 换行。
+#         runner 是按 UTF-8 解析 YAML 的，所以上面这些中文注释在 GitHub 界面上
+#         一定显示正常。
+#
+# 纪律二：`run:` 里的脚本体**只用 ASCII，一个汉字都不写**；中文一律放在 YAML 注释、
+#         步骤的 name 字段、以及 env 值里。
+#         原因（实测过，不是猜的）：runner 会把 run 的内容原样落成一个临时 .ps1 再去
+#         执行，而那份临时文件是不带 BOM 的。如果 runner 所在机器的 ANSI 代码页是 936
+#         （简体中文 Windows —— 恰好就是端到端测试需要的自托管 runner 的典型环境），
+#         PowerShell 5.1 就会按 GBK 去解这段 UTF-8 文本；形如 `EF BC 89` 的汉字序列
+#         落到孤立的引导字节时，解码器会把紧跟其后的那个 ASCII 字符一起吃掉。
+#         实测结果：行尾的 `）'` 被解成 `锛?`，闭合单引号消失，整个脚本报
+#         "The string is missing the terminator"，一步都跑不起来。
+#         而 YAML 注释 / name / env 这三处 runner 从不经过代码页转换（env 是以 Unicode
+#         直接传给进程的），所以放中文绝对安全。
+# ----------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: '额外运行端到端测试 tests\Test-Engine-E2E.ps1（11 项）。需要交互式桌面会话才能弹确认框和枚举真实右键菜单；GitHub 托管 runner 是无交互会话，必然失败，只有自托管 runner 才可能通过。'
+        required: false
+        type: boolean
+        default: false
+
+# 同一个分支连续推送时，取消上一次还在跑的 CI，省 runner 时间
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: 编译 + 测试（Windows PowerShell 5.1）
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        # 两个测试脚本都是 PowerShell 5.1 脚本，而且右键菜单实际走的就是 5.1，
+        # 所以下面的 run 步骤统一用 Windows PowerShell（powershell.exe），不用 pwsh 7。
+        # 被调用的脚本本身再用 powershell -NoProfile -ExecutionPolicy Bypass -File
+        # 起一个干净的 5.1 子进程来跑：不带用户 profile，也不受执行策略影响。
+        shell: powershell
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 编码红线检查（BOM / 纯 ASCII）
+        # tools\Test-Encoding.ps1 由 tools\ 目录维护：退出码 0 = 通过，非 0 = 有违规文件。
+        # 这一步故意排在编译之前。
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\Test-Encoding.ps1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host ('[FAIL] encoding check, exit=' + $LASTEXITCODE)
+            exit $LASTEXITCODE
+          }
+          Write-Host '[OK] encoding check passed'
+
+      - name: 编译 exe 并打包
+        # -Package 会额外产出 bin\PermanentDeleteSetup-package.zip
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item bin\PermanentDeleteSetup.exe, bin\PermanentDeleteSetup-package.zip |
+            Select-Object Name, Length
+
+      - name: 安装器测试（47 项）
+        # 会真的把「永久删除（不进回收站）」动词写进 HKLM\SOFTWARE\Classes 再卸载掉，
+        # 需要管理员权限；GitHub 的 windows runner 默认就是管理员会话，直接跑即可。
+        # 脚本结尾（T11）会重新安装一次，把现场恢复成可用状态，同时留下部署好的引擎脚本。
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-SetupExe.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 引擎回归测试（56 项）
+        # 被测对象是上一步部署到 %LOCALAPPDATA% 的脚本，所以不能调到安装器测试前面。
+        # 测试用 PERMDEL_AUTOCONFIRM 跳过确认框，全部在 %TEMP% 沙箱目录里进行。
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Engine-Regression.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 端到端测试（可选开关，需要交互式桌面）
+        # 默认关闭。GitHub 托管 runner 上没有可交互的桌面会话，这一步会失败 —— 那是环境限制，
+        # 不是被测代码坏了。请在带交互式桌面的自托管 runner 上打开 run_e2e 再跑。
+        if: ${{ inputs.run_e2e }}
+        timeout-minutes: 10
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Engine-E2E.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 打印测试日志（失败诊断）
+        # 无论成功失败都打印：GUI 走 --quiet 没有控制台，明细只落在日志文件里，测试挂了靠这个复盘。
+        #
+        # 下面脚本第一件事是设置 [Console]::OutputEncoding = UTF8：PowerShell 5.1 默认按系统
+        # ANSI 编码往管道写，中文日志到了 CI 里会变成问号，显式改成 UTF-8 才能正常显示。
+        # 这行代码本身是纯 ASCII，所以放在 run 里没问题。
+        if: always()
+        run: |
+          try {
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          } catch { }
+          $dir = Join-Path $env:LOCALAPPDATA 'PermanentDelete'
+          Write-Host ('log dir: ' + $dir)
+          foreach ($name in @('setup.log', 'delete.log')) {
+            $p = Join-Path $dir $name
+            Write-Host ''
+            Write-Host ('===== ' + $p + ' =====')
+            if (Test-Path -LiteralPath $p) {
+              Get-Content -LiteralPath $p -Encoding UTF8 -Tail 300 -ErrorAction SilentlyContinue
+            } else {
+              Write-Host '(not found: that stage has not run yet, or nothing was installed/deleted)'
+            }
+          }
+
+      - name: 上传编译产物
+        # 测试失败时也上传，方便直接拿到那一版的 exe 复现问题
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PermanentDeleteSetup
+          path: |
+            bin/PermanentDeleteSetup.exe
+            bin/PermanentDeleteSetup-package.zip
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,21 @@
+# Issue 模板选择页的配置。
+#
+# 链接里的 `2604290100/permanent-delete-menu` 是本仓库的 GitHub 地址 ——
+# 如果 fork 了、改了仓库名、或者换了账号，请把下面两条 url 一并改掉。
+# 另外：`/blob/main/README.md` 里的 main 是默认分支名，若默认分支叫 master 请改成 master。
+#
+# 「讨论区」那条需要先在 GitHub 上启用才会真正可用：
+#   仓库 → Settings → Features → 勾上 Discussions
+# 不想用讨论区的话，把 contact_links 里那一条整段删掉即可。
+
+# 关掉"空白 issue"：所有 issue 都必须走模板，否则关键信息（Windows 版本、status 输出）问不出来
+blank_issues_enabled: false
+
+contact_links:
+  - name: 📖 使用文档（README）
+    url: https://github.com/2604290100/permanent-delete-menu/blob/main/README.md
+    about: 安装 / 卸载 / 命令行用法 / 编码红线 / 已知风险与限制都在这里，先看一遍能省一轮来回
+
+  - name: 💬 讨论区（Discussions）
+    url: https://github.com/2604290100/permanent-delete-menu/discussions
+    about: 使用提问、经验分享、新功能想法请发到讨论区，不占用 issue 列表（推送前请先在仓库设置里启用 Discussions）

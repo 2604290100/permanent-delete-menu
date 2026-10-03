@@ -1,0 +1,161 @@
+name: 缺陷报告（菜单不显示 / 删除行为不对）
+description: 报告「永久删除（不进回收站）」右键菜单或删除引擎的问题
+title: '[Bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！
+
+        这个工具要写 `HKLM` 注册表、还要真的永久删除文件，绝大多数现象都跟机器环境强相关，
+        所以下面几项请尽量都填上 —— 尤其是 `status` 的输出，它比"我看不到菜单"这句话有用得多。
+
+        > ⚠️ **贴日志或截图前请先删掉个人信息**（例如 `C:\Users\你的名字\...`），
+        > 换成 `<用户>` / `<路径>` 就行。GitHub 上的东西是会一直留着的。
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows 版本
+      description: '按 `Win+R`，输入 `winver` 回车，把弹窗里的版本号抄下来（要具体到内部版本号）'
+      placeholder: 'Windows 10 专业版 22H2（内部版本 19045.1234）'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: target-kind
+    attributes:
+      label: 出问题的是文件还是文件夹？
+      description: 本工具的动词只注册在 `AllFilesystemObjects` 这一个类下，文件和文件夹共用同一个菜单项。
+      options:
+        - 单个文件
+        - 单个文件夹
+        - 文件夹（含里面的内容）
+        - 多个文件
+        - 多个文件夹
+        - 混合多选（文件和文件夹一起选中）
+        - 其他 / 不确定
+    validations:
+      required: true
+
+  - type: dropdown
+    id: menu-visible
+    attributes:
+      label: 资源管理器右键菜单里能看到「永久删除（不进回收站）」这一项吗？
+      description: 如果只有在按住 Shift 右键时才出现，说明装成了"扩展菜单"模式（界面上的「仅 Shift 显示」选项）。
+      options:
+        - 能看到，点下去也正常删除
+        - 能看到，但点了没反应
+        - 能看到，但会弹报错或弹框一闪就没了
+        - 看不到（右键菜单里根本没有这一项）
+        - 只有按住 Shift 右键才看得到
+        - 看得到，但是灰色不可点
+        - 没注意 / 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: status-output
+    attributes:
+      label: status 输出的 fileVisible / folderVisible / hideFlags
+      description: |
+        这三行是用 `Shell.Application` 实测枚举右键菜单动词得到的**真实**结果（注册表写对了 ≠ 菜单里可见），
+        是判断"到底装没装上、有没有被隐藏"的关键。
+
+        在 exe 所在目录打开一个 **Windows PowerShell 5.1** 窗口，粘贴运行：
+
+        ```powershell
+        $si = New-Object System.Diagnostics.ProcessStartInfo
+        $si.FileName = (Resolve-Path .\PermanentDeleteSetup.exe)
+        $si.Arguments = 'status'
+        $si.UseShellExecute = $false
+        $si.RedirectStandardOutput = $true
+        $p = [System.Diagnostics.Process]::Start($si); $p.WaitForExit()
+        $p.StandardOutput.ReadToEnd()
+        ```
+
+        （本 exe 是 GUI 子系统，直接用 `&` 调用既不会等待也不会捕获输出，所以必须走 `ProcessStartInfo`。
+        也可以把完整输出都贴上来，里面还有 `installed` / `multiSelectModel` / `command` / `staleKeys` 等字段。）
+      placeholder: |
+        fileVisible=false
+        folderVisible=true
+        hideFlags=LegacyDisable,ProgrammaticAccessOnly
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: menu-manager
+    attributes:
+      label: 机器上装了右键菜单管理类工具吗？
+      description: 这类工具的「审核」会给新装的动词写入隐藏标志（LegacyDisable / ProgrammaticAccessOnly / HideBasedOnVelocityId），是"菜单项看不到"最常见的原因；安装时会自动清除，但用户也需要在该工具里放行这一项。
+      options:
+        - 装了 ContextMenuManagerPlus
+        - 装了其他右键菜单管理工具（360、火绒、各类"右键管理"工具等）
+        - 装了不止一个
+        - 没装
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从"在什么位置、右键点了哪个对象"开始写。如果是多选才出问题，请写清楚选了几项、怎么选的、以及弹了几个确认框。
+      placeholder: |
+        1. 打开资源管理器进入 D:\test
+        2. 按住 Ctrl 选中 a.txt 和子文件夹 b
+        3. 右键 → 永久删除（不进回收站）
+        4. 实际：弹出两个确认框（期望：只弹一个）
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志片段（delete.log / setup.log）
+      description: |
+        日志位置（在资源管理器地址栏粘贴 `%LOCALAPPDATA%\PermanentDelete` 就能打开）：
+
+        - `delete.log` —— 删除引擎的日志，排查删除行为主要看它（`START` / `BATCH n=` / `CONFIRM` / `DELETED`）
+        - `setup.log` —— 安装器的日志，排查"装没装上 / 有没有清隐藏标志"看它
+
+        **贴之前请把用户名、盘符、目录名等个人信息删掉或替换成 `<用户>` / `<路径>`。**
+        只贴出错时间点前后的那几十行就够了，不用整份。
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望的行为
+      description: 你觉得应该是什么结果？
+      placeholder: '例：混合选中 3 个对象时应该只弹一个确认框，点"永久删除"后三个都被删掉。'
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: exe 版本或 SHA256（可选）
+      description: '在 exe 所在目录执行 `Get-FileHash -Algorithm SHA256 .\PermanentDeleteSetup.exe`；如果是自己编译的，写一下分支或 commit 短哈希'
+      placeholder: 'v1.0.0 / 3f2a1b0c...（或 commit 短哈希）'
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我读过 README 里的「已知风险与限制」（未签名的 exe 会被安全软件 / HIPS 拦；右键菜单管理工具的审核会隐藏菜单项；超大目录删除时窗口会短暂无响应）
+          required: true
+        - label: 日志 / 截图里的个人路径信息我已经删掉或替换了
+          required: true
+        - label: 我搜过已有的 issue，没有重复问题
+          required: false

@@ -1,0 +1,220 @@
+# ============================================================================
+# 永久删除 · 右键菜单管理器 —— 发布（Release）
+#
+# 触发：推送 v* 标签（例如 v1.0.0）
+#
+# 发布前先过一遍闸门，任何一步失败都不会创建 Release（避免放出去一个没过测试的版本）：
+#   编码红线检查 → 编译 + 打包 → 安装器测试（47 项）→ 引擎回归测试（56 项）
+# 端到端测试（11 项）不在这里跑：它需要交互式桌面会话，在 ci.yml 里也是可选的。
+#
+# 会产出三个附件：
+#   PermanentDeleteSetup.exe          单文件安装器（GUI + 命令行），引擎脚本已内嵌
+#   PermanentDeleteSetup-package.zip  源码 + 引擎 + 测试 + 文档打包
+#   SHA256SUMS.txt                    前两个文件的 SHA256（Get-FileHash -Algorithm SHA256）
+#
+# 权限：创建 Release 需要写权限，所以这里必须给 contents: write（ci.yml 里只给 read）。
+#
+# ----------------------------------------------------------------------------
+# 编码纪律（和 ci.yml 里那两条完全一致，理由见 ci.yml 文件头的详细说明）
+#
+#   1) 本文件是 UTF-8 不带 BOM、LF 换行 —— runner 按 UTF-8 解析，中文注释显示正常。
+#   2) `run:` 里的脚本体只用 ASCII，中文一律放到 YAML 注释、步骤 name、env 值里。
+#      尤其是下面那一大段中文发布说明：它放在 env 里，由 runner 以 Unicode 直接传给
+#      进程，永远正确；要是塞进 run 里，就会随临时 .ps1 一起被非 UTF-8 代码页解坏
+#      （实测：行尾的 `）'` 会被吃成 `锛?`，闭合引号消失，脚本直接语法报错）。
+#      哈希、tag、文件名这些本来就是 ASCII，放在 run 里处理没有风险。
+# ----------------------------------------------------------------------------
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 编译 + 测试 + 发布
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        # 测试脚本是 PowerShell 5.1 脚本，统一起 5.1 子进程来跑（不用 pwsh 7）
+        shell: powershell
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 编码红线检查（BOM / 纯 ASCII）
+        # tools\Test-Encoding.ps1：退出码 0 = 通过，非 0 = 有违规文件
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools\Test-Encoding.ps1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host ('[FAIL] encoding check, exit=' + $LASTEXITCODE)
+            exit $LASTEXITCODE
+          }
+          Write-Host '[OK] encoding check passed'
+
+      - name: 编译 exe 并打包
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -Package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item bin\PermanentDeleteSetup.exe, bin\PermanentDeleteSetup-package.zip |
+            Select-Object Name, Length
+
+      - name: 安装器测试（47 项）
+        # 真的往 HKLM\SOFTWARE\Classes 写动词再删掉，需要管理员（runner 默认就是）。
+        # 收尾会把现场恢复成"已正确安装"，同时留下引擎回归测试需要的部署物。
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-SetupExe.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 引擎回归测试（56 项）
+        # 必须排在安装器测试之后：被测的是 %LOCALAPPDATA% 下已部署的脚本
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Engine-Regression.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 打印测试日志（失败诊断）
+        if: always()
+        run: |
+          try {
+            [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          } catch { }
+          $dir = Join-Path $env:LOCALAPPDATA 'PermanentDelete'
+          foreach ($name in @('setup.log', 'delete.log')) {
+            $p = Join-Path $dir $name
+            Write-Host ''
+            Write-Host ('===== ' + $p + ' =====')
+            if (Test-Path -LiteralPath $p) {
+              Get-Content -LiteralPath $p -Encoding UTF8 -Tail 200 -ErrorAction SilentlyContinue
+            } else {
+              Write-Host '(not found)'
+            }
+          }
+
+      - name: 生成 SHA256SUMS.txt
+        # 写成 sha256sum 风格的两列（小写哈希 + 两个空格 + 文件名），方便用户对照校验。
+        # 落盘时用不带 BOM 的 UTF-8：内容全是 ASCII，别让 BOM 干扰别人做 diff 或直接当校验输入。
+        run: |
+          $files = @(
+            'bin\PermanentDeleteSetup.exe',
+            'bin\PermanentDeleteSetup-package.zip'
+          )
+          $lines = foreach ($f in $files) {
+            if (-not (Test-Path -LiteralPath $f)) { throw ('missing artifact: ' + $f) }
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $f).Hash.ToLower()
+            Write-Host ('{0}  {1}' -f $hash, $f)
+            ('{0}  {1}' -f $hash, (Split-Path -Leaf $f))
+          }
+          $out = Join-Path $env:GITHUB_WORKSPACE 'SHA256SUMS.txt'
+          # UTF-8 without BOM (set in the YAML comment above the step)
+          [System.IO.File]::WriteAllLines($out, $lines, (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host ''
+          Write-Host ('wrote: ' + $out)
+
+      - name: 生成发布说明
+        # 正文（中文）放在 env 里，见文件头的编码纪律第 2 条。
+        # 里面的 __SUMS__ 是个占位符，这一步会用 SHA256SUMS.txt 的真实内容把它替换掉。
+        # 落盘同样用不带 BOM 的 UTF-8：gh 会把文件原样当正文，BOM 会变成正文开头的脏字符。
+        env:
+          RELEASE_NOTES: |
+            ## 永久删除 · 右键菜单管理器
+
+            给 Windows 资源管理器加一个「永久删除（不进回收站）」右键菜单项：双击一个按钮 exe 就能添加 / 移除，
+            删除时文件不经过回收站，而是直接被删掉。
+
+            ### 附件
+
+            | 文件 | 说明 |
+            | --- | --- |
+            | `PermanentDeleteSetup.exe` | 单文件安装器（图形界面 + 命令行），引擎脚本已内嵌，不依赖旁边的任何文件 |
+            | `PermanentDeleteSetup-package.zip` | 源码 + 引擎 + 测试 + 文档打包，想自己编译的拿这个 |
+            | `SHA256SUMS.txt` | 上面两个文件的 SHA256 校验值 |
+
+            ### 注意：exe 没有代码签名，会被安全软件拦
+
+            本 exe **未做代码签名**（签名要买证书），而它的行为又是「写 HKLM 注册表 + 永久删除文件」，
+            所以很容易被杀毒软件 / HIPS 拦截、隔离甚至直接删掉 —— 实测中火绒这类 HIPS 就会报警。
+            如果被拦了，请手动放行 / 加白名单；要彻底避免只能自己拿源码编译（见仓库 README）。
+
+            **请只从本 Release 下载，并且对照下面的 SHA256 校验一遍再运行。**
+
+            ### 校验下载到的文件
+
+            `SHA256SUMS.txt` 内容：
+
+            ```
+
+            __SUMS__
+
+            ```
+
+            在文件所在目录执行（任选一种）：
+
+            ```bat
+            certutil -hashfile PermanentDeleteSetup.exe SHA256
+            ```
+
+            ```powershell
+            Get-FileHash -Algorithm SHA256 .\PermanentDeleteSetup.exe | Format-List
+            ```
+
+            把输出和上面两份哈希对照，一致再运行。不一致说明文件在下载或传输中被改动过，请删掉重新下载。
+
+            ### 用法
+
+            ```
+            双击 PermanentDeleteSetup.exe       打开按钮界面：状态 + 添加/修复 + 移除 + 测试一下
+            PermanentDeleteSetup.exe status     查看状态（key=value，含 Shell 实测的菜单可见性）
+            PermanentDeleteSetup.exe install    命令行安装（可加 --quiet / --extended / --menu-text=文字）
+            PermanentDeleteSetup.exe uninstall  命令行卸载
+            PermanentDeleteSetup.exe help       用法
+            ```
+
+            退出码：`0` 成功 / `1` 有问题 / `2` 参数错误 / `5` 用户取消了 UAC 提权。
+            添加和移除需要管理员权限（动词必须注册到 HKLM），会弹一次 UAC；查看状态和自检不需要。
+
+            ### 已知限制
+
+            - 右键菜单管理类工具（例如 ContextMenuManagerPlus）的「审核」功能会给新动词写隐藏标志
+              （`LegacyDisable` / `ProgrammaticAccessOnly` / `HideBasedOnVelocityId`），导致菜单里看不到。
+              安装时已自动清除这些标志，但建议同时在该工具里把这一项放行，否则下次审核可能又被隐藏。
+            - 超大目录（几十万文件）的删除阶段窗口会短暂无响应，属正常现象。
+            - 无权限的文件（ACL 拒绝）或被独占占用的文件只会报失败，不会尝试提权或解锁。
+        run: |
+          $sumsPath = Join-Path $env:GITHUB_WORKSPACE 'SHA256SUMS.txt'
+          if (-not (Test-Path -LiteralPath $sumsPath)) { throw ('missing: ' + $sumsPath) }
+          $sums = [System.IO.File]::ReadAllText($sumsPath).Trim()
+          $notes = $env:RELEASE_NOTES.Replace('__SUMS__', $sums)
+          $notes = $notes.TrimEnd() + "`r`n" + "`r`n" + 'Release tag: ' + $env:GITHUB_REF_NAME + "`r`n"
+          $out = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          # UTF-8 without BOM: gh uses this file as-is for the release body
+          [System.IO.File]::WriteAllText($out, $notes, (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host ('wrote: ' + $out)
+          Write-Host ('notes chars: ' + $notes.Length)
+
+      - name: 创建 GitHub Release
+        # 用 runner 自带的 gh CLI，不引第三方 action。
+        # 标题放在 env 里（中文），run 里只做 ASCII 的拼接。
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TITLE: '永久删除 · 右键菜单管理器'
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $notes = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          if (-not (Test-Path -LiteralPath $notes)) { throw ('missing notes: ' + $notes) }
+          $ghArgs = @(
+            'release', 'create', $tag
+            '--title', ($env:RELEASE_TITLE + ' ' + $tag)
+            '--notes-file', $notes
+            'bin\PermanentDeleteSetup.exe'
+            'bin\PermanentDeleteSetup-package.zip'
+            'SHA256SUMS.txt'
+          )
+          & gh @ghArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host ('release created: ' + $tag)

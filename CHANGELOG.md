@@ -1,0 +1,75 @@
+# 更新日志
+
+本文件记录所有值得写下来的改动。
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [1.0.0] - 2026-10-04
+
+首次公开发布。此前是一组需要手工放脚本、手工改注册表的独立 `.ps1`，这一版重写成
+**单文件安装器**：引擎脚本内嵌进 exe，加/减菜单点两下就完事。
+
+### 新增
+
+- **一键添加 / 修复 / 移除**资源管理器右键菜单里的「永久删除（不进回收站）」
+  （`HKLM\SOFTWARE\Classes\AllFilesystemObjects\shell\PermanentDelete`，只注册这一处）。
+- **GUI + CLI 双入口**：双击 exe 是图形界面；带参数运行是命令行，支持
+  `status` / `verify` / `install` / `uninstall` / `help`，以及 `--quiet`、
+  `--extended`（仅在按住 Shift 时显示）、`--menu-text=`（自定义菜单文字）。
+- **多选合并成一个确认框**。资源管理器对静态动词是逐项调用的（实测选中 36 个文件夹会拉起
+  36 个进程，`MultiSelectModel=Player` 对静态动词无效），引擎用"命名互斥体 + 队列目录 +
+  自适应静默窗口（默认 700 ms，硬上限 8 秒）"把这些调用合并成**一次**确认。
+- **菜单可见性自检**：`status` 不只是读注册表，而是用 `Shell.Application` 真的枚举一遍右键
+  动词（`fileVisible` / `folderVisible`）。注册表写对 ≠ 菜单可见。
+- **自动清除隐藏标志**：右键菜单管理工具（如 ContextMenuManager 一类）会往动词项写
+  `LegacyDisable`、`ProgrammaticAccessOnly`、`HideBasedOnVelocityId`、`ExtendedVerbs`，
+  安装时会一并清掉，并在 `status` 里以 `hideFlags=` 报告。
+- **历史注册项自动清理**：早期版本同时往 `*\shell` 和 `Directory\shell` 注册（会导致混合选中
+  弹两个框），安装/卸载时自动清除这些旧键，并留下 `.reg` 备份。
+- 安装器带 GUI 的**「测试一下」**按钮：真的弹一次确认框，用来验证菜单到引擎整条链路。
+
+### 修复
+
+- **单个文件右键会不确认就删除（数据丢失级）**：参数绑定写成了
+  `ValueFromRemainingArguments`，导致第一个位置参数被当成 `-ArgsFile` 参数文件路径，
+  于是"删除文件"变成"读参数文件"并直接执行。改成
+  `[CmdletBinding(PositionalBinding = $false)]`，并且只接受 `%TEMP%` 下、扩展名为
+  `.pdl` 的文件当参数文件。
+- **含空格路径被拆成多个参数**：Shell 展开 `%V` 时可能不加引号，
+  `Vector Magic 1.15 中文版` 会被拆成 4 个参数。新增 `REJOIN`：只在"拼回来的路径确实存在"
+  时才合并，避免把多个真实路径错误地粘在一起。
+- **确认框不可见，表现为"右键点了没反应"**：启动器用 `Run(cmd, 0, False)` 隐藏控制台，
+  这种进程里 WinForms 的 `Form.ShowDialog()` 窗口会**继承隐藏状态**（`MessageBox` 不受影响）。
+  改成显式 `ShowWindow(SW_SHOW)` + 1.6 秒看门狗，仍不可见就退回系统 `MessageBox`。
+- **启动器的参数阈值恒为 0**：`.vbs` 里混进了中文注释，而 wscript 按 ANSI 读取，
+  注释最后一个字节把换行"吞"掉了，下一行 `maxLen = 28000` 被并进注释。改为
+  **`.vbs` 纯 ASCII**，并加 `maxLen < 1` 的安全兜底。
+- **队列残留判定**：早期用文件时间戳判断残留，用户在确认框上停留久了会丢请求；
+  改为抢命名互斥体判定有无活实例，启动时清理残留（`.tmp` 半成品另有 60 秒时效规则）。
+- **勾了「仅 Shift 显示」后『添加 / 修复』会误报失败**：这种模式下动词键上多了 `Extended` 值，
+  Shell 只在按住 Shift 时列出它，而自检用的 `Shell.Application.Verbs()` 没法模拟按 Shift，
+  于是枚举结果必然为空，被当成"装好了但看不见"而返回退出码 1。现在会区分
+  **"枚举不到"与"注册表不正常"**：注册表正常且处于仅 Shift 模式时判定为预期，
+  `status` / `verify` 新增 `visibleByDesign=` 字段如实标注，GUI 显示绿色
+  「仅 Shift 显示（按住 Shift 右键可见）」而不是红字报错。
+
+### 测试
+
+- 三套测试共 **114 项**，全部通过：
+  - `tests\Test-SetupExe.ps1` —— 安装器 **47 项**（含引擎文件与源码逐字节一致、BOM/ASCII 红线、
+    幂等重复安装、隐藏标志被写入后能自动修好并恢复可见、历史键清理、Shell 实测可见性、
+    以及"仅 Shift 显示仍须返回成功"的回归用例）；
+  - `tests\Test-Engine-Regression.ps1` —— 引擎回归 **56 项**（含合并窗口、参数重拼、超长路径、
+    junction、只读属性、嵌套选择等）；
+  - `tests\Test-Engine-E2E.ps1` —— 真实 Shell 端到端 **11 项**（用 `Shell.Application` 枚举动词并
+    `DoIt()` 触发，就是点菜单走的那条路；会短暂弹出真实确认框）。
+- 新增 `tests\Test-All.ps1`（一条命令跑全套）与 `tools\Test-Encoding.ps1`（编码红线体检）。
+
+### 已知限制
+
+- 未签名 exe，首次运行可能被 SmartScreen / 杀软 / HIPS 拦下。
+- 注册动词必须写 `HKLM`，所以安装和卸载都需要管理员权限（`HKCU` 下的静态动词实测
+  资源管理器不认）。日常使用不需要提权。
+- 菜单项是否显示最终由资源管理器决定，某些菜单管理工具会持续往里写隐藏标志。
+
+[1.0.0]: https://github.com/2604290100/permanent-delete-menu/releases/tag/v1.0.0
