@@ -18,7 +18,7 @@ description: Use when working on the "永久删除（不进回收站）" Windows
   engine\launch_perm_delete.vbs  引擎启动器（也内嵌进 exe）
   tests\Test-All.ps1             一条命令跑完全部测试
   tests\Test-SetupExe.ps1        安装器测试 49 项
-  tests\Test-Engine-Regression.ps1 引擎回归 67 项
+  tests\Test-Engine-Regression.ps1 引擎回归 71 项
   tests\Test-Engine-E2E.ps1      真实 Shell 端到端 11 项（会短暂弹真实确认框）
   tools\Test-Encoding.ps1        编码红线检查（本地与 CI 共用）
 ```
@@ -98,6 +98,13 @@ powershell -File <项目根>\tests\Test-Engine-E2E.ps1
 - **Shell 是逐项调用动词的**（`MultiSelectModel=Player` 对静态动词不生效）：选 36 个文件夹会拉起
   36 个进程，每个只带 1 个路径。引擎用"命名互斥体 + 队列 + 自适应静默窗口"把它们合并成**一个**
   确认框。窗口默认 700ms（每来一个新请求就顺延），硬上限 8 秒。
+- **"正在汇总选中的项目…"进度框只在真的在等一批项目时才弹**：条件是"队列里已收到 ≥2 项"且
+  "已等过 900ms"（`PERMDEL_MERGE_FEEDBACK_MS`）。单次右键只有 1 项 ⇒ 一个多余窗口都不弹。
+  曾经是"过了 300ms 就弹"，结果常规右键先闪一个框再消失，用户当成故障。
+- **主循环第二轮必须走"静默收尾宽限"**（`Wait-PDMergeWindow -Silent`，`PERMDEL_POSTGRACE_MS`
+  = 400ms）：用户在确认框上做完选择（**确定和取消都算**）之后，只静默等一小会儿看有没有新请求，
+  **绝不弹窗口**。老版本这里会再走一整轮合并窗口 → 用户刚点完取消，桌面上又跳出一个汇总框
+  （回归测试 T22 锁住它：`WINDOW round=2 waited<1000ms`）。
 - **`%V` 可能不加引号**：含空格的路径会被空格拆成多个参数，引擎用 `REJOIN` 只在"拼回来的路径确实
   存在"时才合并。
 - **进程以 `SW_HIDE` 启动**（VBS 用 `Run(cmd, 0, False)` 隐藏控制台），这种进程里 WinForms 的
@@ -116,6 +123,43 @@ powershell -File <项目根>\tests\Test-Engine-E2E.ps1
   并跑一遍"点取消后文件还在"的验证。
 - **GUI 的活不能在 UI 线程上干**：提权子进程（`RunElevatedQuiet`）、部署、`ShellVerify.Check`
   的 COM 枚举都要走 `MainForm.RunBusy`（线程池 + 完成后 `BeginInvoke`），否则点按钮就假死。
+
+## 安装器界面的四条硬规则（全是"看着像 bug"那种坑）
+
+| 规则 | 违反后的症状 |
+| --- | --- |
+| 按钮行只用 `MainForm.LayoutButtonRow()` 排，**不手写坐标** | 手写坐标时「打开日志目录」右边界压进「查看引擎日志」16px，两个按钮糊在一起 |
+| 标签（`Label`）**绝不能和按钮重叠** | 按钮变成一块空白、点它毫无反应（标签把背景重画了，还吃掉鼠标点击） |
+| `MinimizeBox = false`（与 `MaximizeBox = false` 一起） | `FixedDialog` + `Min=true/Max=false` 时 Windows 在标题栏画一个**灰掉的**最大化方框，夹在最小化和关闭中间，点了没反应 |
+| 界面文字**不用 `✓ ⚠ →` 这类符号** | 微软雅黑没有 `✓`(U+2713) 字形 → 渲染成空白（`【】『』≥…` 正常） |
+
+- 状态行那几个标签宽度别贪大：给按钮留出右边距，并让按钮 `BringToFront()`。
+  判断有没有重叠别靠眼睛 —— 枚举子窗口矩形比一下（`EnumChildWindows` + `GetWindowRect`）。
+- 想确认标题栏按钮只剩一个 ✕：截图后逐行扫像素，别看缩略图（缩略图会骗人）。
+
+## 「测试一下」怎么判断用户已经关掉确认框
+
+引擎主实例**全程持有** `Local\PermanentDelete.Agent` 这个命名互斥体，安装器只需问
+"这个互斥体对象还在不在"（`Mutex.OpenExisting`）就知道框还开着没有。
+
+- **千万别用 `WaitOne(0)` 去抢**：抢到的一瞬间，正要启动的引擎会把自己判成"已有实例"，
+  把手里的路径转交出去然后退出（测试就永远等不到框）。
+- 老实现是轮询"测试目录还在不在"，于是**点取消 ⇒ 目录还在 ⇒ 只能等 90 秒超时**，
+  用户看到"点完取消，界面一直是禁止状态"。改用互斥体后实测 **551ms** 恢复。
+- 测试期间**只锁「测试一下」这一个按钮**，其余按钮保持可用。
+
+## 写 PowerShell 脚本时的一个致命陷阱
+
+```powershell
+[void][SomeClass]::SomeMethod(...) 2>$null    # ✗ 整段脚本一行都不会执行
+[void][SomeClass]::SomeMethod(...)            # ✓
+```
+
+`2>$null` 会把前面的**表达式**提升成"命令管道"，而 `[void]` 转出来的 `System.Void` 无法再转成
+管道要的 `System.Object`，报错是
+`No coercion operator is defined between types 'System.Void' and 'System.Object'`，
+而且是在**创建管道阶段**就炸：连脚本第一行 `Write-Host` 都不会输出，`trap` 也不触发，
+极难定位（本仓库写验证脚本时真踩过）。要丢输出就用 `$null = ...`，不要加重定向。
 
 ## 加新功能的惯例
 

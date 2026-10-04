@@ -53,42 +53,51 @@ namespace PDSetup
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
-            MinimizeBox = true;
+            // MinimizeBox 必须也是 false。实测（Win10 19045，两种组合都截图比过像素）：
+            // FixedDialog 下 Min=true/Max=false 时，Windows 会在标题栏画一个**灰掉的**最大化方框，
+            // 夹在最小化和关闭中间；它不可点、点了毫无反应，用户看到的就是"右上角那个不知道是什么、
+            // 点它没反应的东西"。两个都关掉之后标题栏只剩一个干净的关闭按钮。
+            MinimizeBox = false;
             Font = new Font("Microsoft YaHei UI", 9F);
 
             BuildUi();
             LoadSettingsIntoUi();
             // 首次检测同样放到后台：窗口先出来，状态栏写"正在检测…"，
             // 免得 COM 枚举还没回来时整个窗口是白屏（那是用户最容易觉得"卡住"的一刻）。
-            Shown += delegate { RefreshStatusAsync("正在检测当前状态…"); };
+            Shown += delegate { RefreshStatusAsync("正在检测当前状态…", "就绪"); };
         }
 
         // ------------------------------------------------------------------ UI
         private void BuildUi()
         {
+            // 布局铁律（踩过的坑）：标签的宽度只要和按钮重叠，后加进 Controls 的按钮就会
+            // 被标签的背景画在身上 —— 表现是按钮"变成一块空白、点它没反应"（标签在上面把
+            // 鼠标点击也吃掉了）。所以状态行的标签一律停在 _btnRefresh 左边，
+            // 按钮行也一律用 LayoutButtonRow 按实测文字宽度自动排，不再手写坐标。
             GroupBox gbStatus = new GroupBox();
             gbStatus.Text = "状态";
             gbStatus.Location = new Point(12, 8);
             gbStatus.Size = new Size(736, 150);
             Controls.Add(gbStatus);
 
-            _lblEngine = MakeLabel(gbStatus, 16, 26);
-            _lblRegistry = MakeLabel(gbStatus, 16, 52);
-            _lblVisible = MakeLabel(gbStatus, 16, 78);
-            _lblFlags = MakeLabel(gbStatus, 16, 104);
+            _lblEngine = MakeLabel(gbStatus, 16, 22, 700);
+            _lblRegistry = MakeLabel(gbStatus, 16, 46, 700);
+            _lblVisible = MakeLabel(gbStatus, 16, 70, 700);
+            _lblFlags = MakeLabel(gbStatus, 16, 94, 700);
 
             _btnRefresh = new Button();
             _btnRefresh.Text = "重新检测";
-            _btnRefresh.Location = new Point(600, 24);
-            _btnRefresh.Size = new Size(120, 30);
-            _btnRefresh.Click += delegate { RefreshStatusAsync("正在重新检测…"); };
+            _btnRefresh.Location = new Point(608, 116);
+            _btnRefresh.Size = new Size(124, 28);
+            _btnRefresh.Click += delegate { RefreshStatusAsync("正在重新检测…", "已重新检测"); };
             gbStatus.Controls.Add(_btnRefresh);
+            _btnRefresh.BringToFront();
 
             Label hint = new Label();
             hint.Text = "可见性由系统 Shell 实测枚举，不是只看注册表。";
             hint.ForeColor = Color.DimGray;
-            hint.Location = new Point(392, 82);
-            hint.Size = new Size(330, 40);
+            hint.Location = new Point(16, 121);
+            hint.Size = new Size(520, 20);
             gbStatus.Controls.Add(hint);
 
             GroupBox gbOpt = new GroupBox();
@@ -131,26 +140,31 @@ namespace PDSetup
             gbAct.Size = new Size(736, 74);
             Controls.Add(gbAct);
 
-            _btnInstall = MakeButton(gbAct, "添加 / 修复右键菜单", 16, 26, 190);
+            _btnInstall = MakeButton(gbAct, "添加 / 修复右键菜单");
             _btnInstall.Click += OnInstall;
 
-            _btnRemove = MakeButton(gbAct, "移除右键菜单", 218, 26, 150);
+            _btnRemove = MakeButton(gbAct, "移除右键菜单");
             _btnRemove.Click += OnRemove;
 
-            _btnTest = MakeButton(gbAct, "测试一下", 380, 26, 110);
+            _btnTest = MakeButton(gbAct, "测试一下");
+            // Tag 里放"按钮在忙时显示的备用文字"：排版时按两个文字里更宽的那个留位，
+            // 这样忙碌时改标题不会把按钮撑变形、也不会把字裁掉。
+            _btnTest.Tag = "等待确认框…";
             _btnTest.Click += OnTest;
 
-            _btnOpen = MakeButton(gbAct, "打开日志目录", 502, 26, 130);
+            _btnOpen = MakeButton(gbAct, "打开日志目录");
             _btnOpen.Click += delegate
             {
                 try { Directory.CreateDirectory(AppPaths.AppRoot); Process.Start("explorer.exe", AppPaths.AppRoot); }
                 catch (Exception ex) { SetStatus("打开目录失败: " + ex.Message); }
             };
 
-            // 宽度 104 而不是 84：9pt 微软雅黑下 6 个汉字约 78px，加上内边距后 84 会把
-            // 最后一个字裁掉，用户看到的是「查看引擎日」——这种"看着像 bug"的截断必须避免。
-            _btnRefresh2 = MakeButton(gbAct, "查看引擎日志", 616, 26, 104);
+            _btnRefresh2 = MakeButton(gbAct, "查看引擎日志");
             _btnRefresh2.Click += delegate { ShowEngineLog(); };
+
+            // 按文字实测宽度自动排，间隙自适应 —— 手写坐标时"打开日志目录"的右边界
+            // 曾经压到"查看引擎日志"身上 16px，两个按钮糊在一起。
+            LayoutButtonRow(gbAct, 16, 26, 728, 32, _btnInstall, _btnRemove, _btnTest, _btnOpen, _btnRefresh2);
 
             // 不确定进度条：后台干活时显示，让"卡一下"变成"在忙"。
             // 放在日志框和状态栏之间的空隙里，不遮任何控件。
@@ -187,24 +201,61 @@ namespace PDSetup
 
         private Button _btnRefresh2;
 
-        private static Label MakeLabel(Control parent, int x, int y)
+        private static Label MakeLabel(Control parent, int x, int y, int w)
         {
             Label l = new Label();
             l.Location = new Point(x, y);
-            l.Size = new Size(700, 22);
+            l.Size = new Size(w, 20);
+            l.AutoEllipsis = true;      // 文字太长时给 "..."，不要硬切成一截
             l.Text = "";
             parent.Controls.Add(l);
             return l;
         }
 
-        private static Button MakeButton(Control parent, string text, int x, int y, int w)
+        private static Button MakeButton(Control parent, string text)
         {
             Button b = new Button();
             b.Text = text;
-            b.Location = new Point(x, y);
-            b.Size = new Size(w, 32);
+            b.Size = new Size(96, 32);   // 真实尺寸交给 LayoutButtonRow 按文字算
             parent.Controls.Add(b);
             return b;
+        }
+
+        /// <summary>
+        /// 按钮行自动排版：按实测文字宽度定每个按钮的宽，间隙自适应，整体居中。
+        /// 这样"改文案"或"加功能"都不会再出现重叠/裁字（手写坐标时踩过两次）。
+        /// 按钮 Tag 里若放了备用文案，则按两者中更宽的留位（忙碌时改标题也不会变形）。
+        /// </summary>
+        private static void LayoutButtonRow(Control parent, int left, int y, int right, int height, params Button[] buttons)
+        {
+            int avail = right - left;
+            int[] w = new int[buttons.Length];
+            int sum = 0;
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                int m = TextRenderer.MeasureText(buttons[i].Text, buttons[i].Font).Width;
+                string alt = buttons[i].Tag as string;
+                if (!string.IsNullOrEmpty(alt))
+                {
+                    m = Math.Max(m, TextRenderer.MeasureText(alt, buttons[i].Font).Width);
+                }
+                w[i] = Math.Max(74, m + 30);
+                sum += w[i];
+            }
+
+            int gap = buttons.Length > 1 ? (avail - sum) / (buttons.Length - 1) : 0;
+            if (gap > 34) { gap = 34; }
+            if (gap < 6) { gap = 6; }
+            int total = sum + gap * (buttons.Length - 1);
+            int cx = left + Math.Max(0, (avail - total) / 2);
+
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                buttons[i].Location = new Point(cx, y);
+                buttons[i].Size = new Size(w[i], height);
+                buttons[i].BringToFront();   // 别让先加的标签盖住按钮（点击会被标签吃掉）
+                cx += w[i] + gap;
+            }
         }
 
         private void SetStatus(string text)
@@ -299,10 +350,10 @@ namespace PDSetup
         }
 
         /// <summary>异步版：按钮点击用。窗口不会假死，按钮期间禁用。</summary>
-        private void RefreshStatusAsync(string busyText)
+        private void RefreshStatusAsync(string busyText, string doneNote)
         {
             RunBusy(busyText, delegate { _snapshot = GatherStatus(); },
-                delegate { ApplyStatus(_snapshot, "已重新检测"); });
+                delegate { ApplyStatus(_snapshot, doneNote); });
         }
 
         // ------------------------------------------------------------------ 后台执行
@@ -412,8 +463,68 @@ namespace PDSetup
                 });
         }
 
+        // ------------------------------------------------------------------ 测试
+        // 测试的难点是"怎么知道用户已经把确认框关掉了"。以前靠轮询目标目录是否消失，
+        // 于是"点了取消"就只能等 90 秒超时 —— 界面就一直灰着（用户报的第一个问题）。
+        // 现在用引擎自己持有的单实例互斥体当信号：互斥体对象在 ⇒ 引擎进程还活着 ⇒ 框还开着；
+        // 用户一答完（确定或取消），引擎收尾退出，互斥体消失，这里立刻恢复界面。
+        private Timer _testTimer;
+        private string _testDir;
+        private int _testTicks;
+        private bool _testSawAgent;
+
+        /// <summary>
+        /// 引擎主实例是否还活着。只看"互斥体对象在不在"，不去 WaitOne：
+        /// 抢一下再放会让真正要启动的引擎误判成"已有实例"而把手里的路径转交出去。
+        /// </summary>
+        private static bool AgentRunning()
+        {
+            System.Threading.Mutex m = null;
+            try
+            {
+                m = System.Threading.Mutex.OpenExisting(@"Local\PermanentDelete.Agent");
+                return true;
+            }
+            catch (System.Threading.WaitHandleCannotBeOpenedException) { return false; }   // 对象不存在 = 没在跑
+            catch { return false; }
+            finally { if (m != null) { try { m.Dispose(); } catch { } } }
+        }
+
+        /// <summary>测试期间的"半忙碌"：只锁住测试按钮本身，其它按钮照常可用。</summary>
+        private void SetTestRunning(bool running)
+        {
+            _btnTest.Enabled = !running;
+            _btnTest.Text = running ? (string)_btnTest.Tag : "测试一下";
+            if (running)
+            {
+                _progress.Visible = true;
+                Cursor = Cursors.AppStarting;
+            }
+            else if (_busy == 0)
+            {
+                _progress.Visible = false;
+                Cursor = Cursors.Default;
+            }
+        }
+
+        private void StopTestWatch()
+        {
+            if (_testTimer != null)
+            {
+                _testTimer.Stop();
+                _testTimer.Dispose();
+                _testTimer = null;
+            }
+            _testTicks = 0;
+            _testSawAgent = false;
+            _testDir = null;
+            SetTestRunning(false);
+        }
+
         private void OnTest(object sender, EventArgs e)
         {
+            if (_testTimer != null) { SetStatus("已经有一个确认框在等你了，先在框里选一个。"); return; }
+
             if (!_engine.IsDeployed())
             {
                 MessageBox.Show(this, "引擎脚本还没部署，请先点『添加 / 修复右键菜单』。", "测试",
@@ -436,45 +547,88 @@ namespace PDSetup
                 return;
             }
 
-            SetUiEnabled(false);
-            SetStatus("已弹出确认框，请在确认框里操作…（等于你右键点『永久删除』）");
             ProcessStartInfo psi = new ProcessStartInfo("wscript.exe", "\"" + AppPaths.EngineVbs + "\" \"" + dir + "\"");
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
             try { Process.Start(psi); }
             catch (Exception ex)
             {
-                SetUiEnabled(true);
                 MessageBox.Show(this, "启动引擎失败: " + ex.Message, "测试", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
 
-            // 等用户处理（最多 90 秒）。用定时器轮询而不是 DoEvents 死循环：
-            // 后者会把消息泵搅在一起（重入），窗口照样不跟手。
-            int ticks = 0;
-            Timer poll = new Timer();
-            poll.Interval = 500;
-            poll.Tick += delegate
+            _testDir = dir;
+            _testTicks = 0;
+            _testSawAgent = false;
+            SetTestRunning(true);
+            SetStatus("确认框已弹出：请在框里选择（确定或取消），选完这里会自动恢复…");
+
+            // 250ms 轮询：用户一关框，最多半秒界面就恢复
+            _testTimer = new Timer();
+            _testTimer.Interval = 250;
+            _testTimer.Tick += delegate { TestTick(); };
+            _testTimer.Start();
+        }
+
+        private void TestTick()
+        {
+            _testTicks++;
+            bool alive = AgentRunning();
+            if (alive) { _testSawAgent = true; }
+
+            // 判定顺序很讲究：
+            //   引擎还活着 → 框还开着，继续等（除非已经等满 10 分钟，别把按钮永久锁死）
+            //   引擎没了、可从没见过它 → 多半是启动就失败/被拦，再给 8 秒观察期
+            //   其它情况 → 用户已经答完了（确定或取消），马上收尾恢复界面
+            if (alive && _testTicks < 2400) { return; }
+            if (!alive && !_testSawAgent && _testTicks < 32) { return; }
+
+            bool started = _testSawAgent;
+            bool timedOut = _testTicks >= 2400;
+            string dir = _testDir;
+            StopTestWatch();
+            bool gone = dir != null && !Directory.Exists(dir);
+            try { if (dir != null && Directory.Exists(dir)) { Directory.Delete(dir, true); } } catch { }
+
+            string note;
+            string msg;
+            MessageBoxIcon icon;
+            if (!started)
             {
-                ticks++;
-                bool gone = !Directory.Exists(dir);
-                if (!gone && ticks < 180) { return; }
-                poll.Stop();
-                poll.Dispose();
-                SetUiEnabled(true);
-                try { if (Directory.Exists(dir)) { Directory.Delete(dir, true); } } catch { }
-                RunBusy("正在检测当前状态…",
-                    delegate { _snapshot = GatherStatus(); },
-                    delegate
-                    {
-                        ApplyStatus(_snapshot, gone ? "测试成功：目标已被永久删除" : "测试结束：目标仍存在（多半点了取消）");
-                        MessageBox.Show(this,
-                            gone ? "测试成功：弹出的确认框确认后，目标被永久删除。" : "测试结束：目标还在（你在确认框里点了取消，或超时）。",
-                            "永久删除 · 测试", MessageBoxButtons.OK,
-                            gone ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
-                    });
-            };
-            poll.Start();
+                note = "测试没跑起来：没等到引擎进程";
+                msg = "没等到引擎进程。常见原因：安全软件拦截了 wscript/powershell，或者引擎脚本没部署好。\r\n\r\n"
+                    + "换个办法验证：随便找个文件，右键看有没有『永久删除（不进回收站）』。";
+                icon = MessageBoxIcon.Warning;
+            }
+            else if (timedOut)
+            {
+                note = "测试超时：确认框一直没被处理";
+                msg = "等了 10 分钟也没等到你在确认框上做选择，测试先收尾了（界面已恢复）。";
+                icon = MessageBoxIcon.Warning;
+            }
+            else if (gone)
+            {
+                note = "测试成功：确认框里点确定后，目标被永久删除";
+                msg = "测试成功：确认框里点『永久删除』之后，目标真的被删掉了。";
+                icon = MessageBoxIcon.Information;
+            }
+            else
+            {
+                note = "测试结束：点了取消，什么都还在";
+                msg = "你点了取消 —— 目标原封不动地留着（这正说明确认框是管用的）。";
+                icon = MessageBoxIcon.Information;
+            }
+
+            string finalNote = note;
+            string finalMsg = msg;
+            MessageBoxIcon finalIcon = icon;
+            RunBusy("正在检测当前状态…",
+                delegate { _snapshot = GatherStatus(); },
+                delegate
+                {
+                    ApplyStatus(_snapshot, finalNote);
+                    MessageBox.Show(this, finalMsg, "永久删除 · 测试", MessageBoxButtons.OK, finalIcon);
+                });
         }
 
         private void ShowEngineLog()

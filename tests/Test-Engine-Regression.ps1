@@ -518,6 +518,26 @@ Check 'T21 数字是精确的"约"' ($logText -match '约 1 个文件')
 Check 'T21 不提示"未完整统计"' (-not ($logText -match '未完整统计'))
 Check 'T21 文件被删除' (-not (Test-Path -LiteralPath $f1))
 
+# ---------------------------------------------------------------- T22  ★回归
+# 用户反馈：右键弹框 → 点取消 → 桌面上又冒出一个"正在汇总选中的项目…"的窗口。
+# 根因是主循环处理完一批之后又走了一遍完整的合并窗口（还在 300ms 处弹窗）。
+# 现在第二批只做一小段静默宽限，一个窗口都不许弹。
+Write-Host 'T22 ★确认框关掉之后不许再等一整轮合并窗口（否则会再冒一个汇总框）'
+Reset-State
+$env:PERMDEL_MERGE_MS = '3000'          # 拉长第一轮，好区分"第一轮"和"收尾宽限"
+$d  = New-Dir 't22'
+$f1 = Join-Path $d 'a.txt'; [System.IO.File]::WriteAllText($f1, 'x')
+$h1 = Start-PD -Targets @($f1) -Tag 't22' -ExpectSeconds 90
+$null = Wait-PD -Handle $h1
+$logText = Read-LogText
+Check 'T22 第一轮走的是正常合并窗口' ($logText -match 'WINDOW round=1 waited=[3-9]\d{3}ms')
+$m2 = [regex]::Match($logText, 'WINDOW round=2 waited=(\d+)ms')
+Check 'T22 第二轮只做静默短宽限（<1000ms）' ($m2.Success -and [int]$m2.Groups[1].Value -lt 1000) $m2.Value
+$rounds = ([regex]::Matches($logText, 'WINDOW round=')).Count
+Check 'T22 只有两轮，不会来回空转' ($rounds -eq 2) ("round 次数=" + $rounds)
+Check 'T22 文件被删除' (-not (Test-Path -LiteralPath $f1))
+$env:PERMDEL_MERGE_MS = ''
+
 # ---------------------------------------------------------------- 汇总
 $fail = @($script:Results | Where-Object { -not $_.Ok })
 Write-Host ''

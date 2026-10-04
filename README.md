@@ -8,7 +8,7 @@
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE.svg)](docs/ARCHITECTURE.md)
 [![dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#从源码构建)
 
-<!-- CI 只跑编码检查 + 安装器 49 项 + 引擎回归 67 项；端到端 11 项需要交互式桌面，
+<!-- CI 只跑编码检查 + 安装器 49 项 + 引擎回归 71 项；端到端 11 项需要交互式桌面，
      默认不跑（workflow_dispatch 的 run_e2e 开关，且只在自托管 runner 上才可能通过）。 -->
 
 ---
@@ -176,7 +176,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Package    # 额外打一个
 
 ## 测试
 
-共 **127 项**，一条命令跑完全部（编码检查 → 安装器 → 引擎回归 → 端到端）：
+共 **131 项**，一条命令跑完全部（编码检查 → 安装器 → 引擎回归 → 端到端）：
 
 ```powershell
 # 需要管理员 PowerShell
@@ -189,11 +189,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-All.ps1
 | --- | --- | --- | --- |
 | `tools/Test-Encoding.ps1` | —— | —— | BOM / 纯 ASCII / 合法 UTF-8 / 无本机绝对路径 |
 | `tests/Test-SetupExe.ps1` | 41 | 管理员 | 装/卸/幂等、隐藏标志清除、历史项清理、部署脚本与源码**字节一致**、Shell 实测可见性 |
-| `tests/Test-Engine-Regression.ps1` | 67 | 管理员 + 先装一次 | 多选合并、只读文件、联接点、超长路径、嵌套、盘根拒绝、取消、陈旧队列、伪造参数文件 |
+| `tests/Test-Engine-Regression.ps1` | 71 | 管理员 + 先装一次 | 多选合并、只读文件、联接点、超长路径、嵌套、盘根拒绝、取消、陈旧队列、伪造参数文件 |
 | `tests/Test-Engine-E2E.ps1` | 11 | 管理员 + **交互桌面** | 用 `Shell.Application` 触发真实动词，验证"只弹一个框 / 取消不删 / 确认才删" |
 
 - 全部在 `%TEMP%` 沙箱内，不碰真实文件。
-- **端到端会真的弹确认框**，无交互会话里跑不了：[ci.yml](.github/workflows/ci.yml) 只跑编码检查 + 41 + 67 项，端到端请在本地手动跑。
+- **端到端会真的弹确认框**，无交互会话里跑不了：[ci.yml](.github/workflows/ci.yml) 只跑编码检查 + 49 + 71 项，端到端请在本地手动跑。
 - 前置条件与写测试的经验见 [CONTRIBUTING.md](CONTRIBUTING.md) §5。
 
 ## 仓库结构

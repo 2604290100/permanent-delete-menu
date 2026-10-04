@@ -8,6 +8,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCompany("2604290100")]
 [assembly: AssemblyProduct("PermanentDeleteSetup")]
 [assembly: AssemblyCopyright("Copyright (C) 2026 2604290100  |  GPL-3.0-or-later")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.1.0")]
+[assembly: AssemblyFileVersion("1.0.1.0")]
 [assembly: ComVisible(false)]

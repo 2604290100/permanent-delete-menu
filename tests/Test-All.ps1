@@ -7,7 +7,7 @@
     顺序（编码检查放最前面，因为编码坏了后面的测试根本没有意义）：
         0) 编码红线检查      tools\Test-Encoding.ps1
         1) 安装器测试 49 项  tests\Test-SetupExe.ps1
-        2) 引擎回归   67 项  tests\Test-Engine-Regression.ps1
+        2) 引擎回归   71 项  tests\Test-Engine-Regression.ps1
         3) 端到端     11 项  tests\Test-Engine-E2E.ps1   （需要交互式桌面）
 
     用法:
@@ -48,7 +48,7 @@ Write-Host ''
 $suites = @()
 $suites += [pscustomobject]@{ Name = '编码红线检查'; File = (Join-Path $repoRoot 'tools\Test-Encoding.ps1'); Skip = $false }
 $suites += [pscustomobject]@{ Name = '安装器测试 49 项'; File = (Join-Path $testsDir 'Test-SetupExe.ps1'); Skip = [bool]$SkipExe }
-$suites += [pscustomobject]@{ Name = '引擎回归 67 项';  File = (Join-Path $testsDir 'Test-Engine-Regression.ps1'); Skip = $false }
+$suites += [pscustomobject]@{ Name = '引擎回归 71 项';  File = (Join-Path $testsDir 'Test-Engine-Regression.ps1'); Skip = $false }
 $suites += [pscustomobject]@{ Name = '端到端 11 项';    File = (Join-Path $testsDir 'Test-Engine-E2E.ps1'); Skip = [bool]$SkipE2E }
 
 $results = @()

@@ -36,7 +36,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 # 3) 跑测试（管理员 PowerShell）
 powershell -File tests\Test-SetupExe.ps1            # 49 项
-powershell -File tests\Test-Engine-Regression.ps1   # 67 项
+powershell -File tests\Test-Engine-Regression.ps1   # 71 项
 powershell -File tests\Test-Engine-E2E.ps1          # 11 项（会短暂弹真实确认框）
 ```
 
@@ -104,7 +104,7 @@ $b = [System.IO.File]::ReadAllBytes('engine\PermanentDelete.ps1')
 
 ## 5. 测试要求
 
-**提交前必须全绿**（编码检查 + 127 项）。一条命令跑全套（顺序：编码检查 → 安装器 → 引擎回归 → 端到端）：
+**提交前必须全绿**（编码检查 + 131 项）。一条命令跑全套（顺序：编码检查 → 安装器 → 引擎回归 → 端到端）：
 
 ```powershell
 # 需要管理员 PowerShell

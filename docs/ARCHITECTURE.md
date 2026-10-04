@@ -91,7 +91,7 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA ^
 2. **可审计性。** 一个"不经过回收站、直接删文件"的工具，用户有权在动手前读完它到底做什么。
    两个纯文本脚本（约 1000 行 PowerShell + 80 行 VBS）可以直接打开看；
    同样的逻辑编译进 exe 就只能信任发布者。
-3. **不重写已验证的东西。** 引擎已有 127 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
+3. **不重写已验证的东西。** 引擎已有 131 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
    重写合并逻辑、删除引擎和全部 UI 细节并重新验证一遍，收益只有"少两个文件"。
 
 代价（如实记录）：引擎脚本必然落在用户可写目录，存在被同机同用户进程篡改的可能。
@@ -147,9 +147,14 @@ HKLM\SOFTWARE\Classes\AllFilesystemObjects\shell\PermanentDelete
 
 - 队列条目是一个小文件：先写 `<guid>.tmp` 再 `Move` 成 `<guid>.arg`（原子改名，避免读到半成品）。
 - **窗口是自适应的**：起始等 700 ms，每发现一个新条目就把截止时间顺延 700 ms，硬上限 8 秒
-  （`PERMDEL_MERGE_MS` / `PERMDEL_MERGE_MAX_MS` 可覆盖）。等待超过 **300 ms** 就会先弹一个
-  "正在汇总选中的项目…"的进度框，避免用户以为卡死（单次右键的等待主要来自进程启动 +
-  这个合并窗口，早点冒出反馈比让用户盯着桌面强）。
+  （`PERMDEL_MERGE_MS` / `PERMDEL_MERGE_MAX_MS` 可覆盖）。
+- **进度框只在"真在等一批项目"时才弹**（`-not $Silent` + `$seen -gt 1` + `$now -gt $MergeFeedbackMs`，
+  默认 900 ms）：单次右键只有 1 个条目，一个多余的窗口都不会出现，直接就出确认框。
+  老版本是"过了 300 ms 就弹"，于是常规右键会先闪一个框再消失，看着像故障。
+- **一轮 vs 收尾**：主循环第二轮（用户在确认框上做完选择之后）走的是 `-Silent` 的
+  **静默收尾宽限**（`PERMDEL_POSTGRACE_MS`，默认 400 ms）。老版本这里会再走一整轮合并窗口，
+  结果用户刚点完取消，屏幕上又跳出一个「正在汇总选中的项目…」——回归测试 T22 锁住这条。
+  收尾只等 400 ms 也不会丢请求：晚到的实例要么被这一轮读到，要么自己抢到互斥体成为新的主实例。
 - **不这么做会怎样**：① 用固定窗口（比如"等 700ms 就动手"），一次选几十项时后面的调用还在路上，
   会分成好几批 → 又是多个确认框；② 不做合并，36 个进程会弹 36 个框、删 36 次。
 - **残留判据用互斥体，不用时间戳**（`Clear-PDQueue`）：能抢到互斥体 ⇒ 当前没有活着的实例
@@ -213,6 +218,44 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 `build.ps1` 现在会自动给 `src/*.cs` 和 `tests/*.ps1` 补回 BOM，但 `build.ps1` 自己仍需人工确认。
 `.gitattributes` 里脚本类文件用 `-text`，就是让 git 彻底不碰这些字节。
 
+### 3.8 安装器界面里的三条硬规则（都是"看着像 bug"的那种）
+
+| 规则 | 为什么 | 违反后的症状 |
+| --- | --- | --- |
+| 按钮行只用 `LayoutButtonRow()` 排，**不手写坐标** | 按 `TextRenderer.MeasureText` 实测文字宽度定宽、间隙自适应 | 手写坐标时「打开日志目录」右边界压到「查看引擎日志」身上 16 px，两个按钮糊在一起 |
+| 标签（`Label`）**绝不能和按钮重叠** | WinForms 里后加进 `Controls` 的控件排在 z 序后面；标签虽然"透明"，但会把按钮那块**重画成背景色**，而且**把鼠标点击也吃掉** | 「重新检测」按钮变成一块空白方框、点它毫无反应（用户报过"右上角那是什么、没反应"） |
+| `MinimizeBox` 必须是 `false` | Win10 下 `FixedDialog` + `Min=true/Max=false` 时，系统会在标题栏画一个**灰掉的**最大化方框 | 标题栏夹着一个不可点的方框（用户报过同一个问题） |
+
+界面状态**不能**用 `✓ ⚠ →` 这类符号：微软雅黑没有 `✓`(U+2713) 的字形，实测渲染成空白。
+文字写中文即可（`【】『』≥…` 都正常）。
+
+### 3.9 「测试一下」怎么知道用户已经关掉确认框
+
+引擎主实例**全程持有** `Local\PermanentDelete.Agent` 这个命名互斥体，所以安装器只要问一句
+"这个互斥体对象还在不在"（`Mutex.OpenExisting`）就知道确认框还开着没有：
+
+- 在 ⇒ 引擎活着 ⇒ 继续等；
+- 没了、而且之前见过它 ⇒ 用户已经做了选择（**确定或取消都算**）⇒ 立刻恢复界面。
+
+**不要用 `WaitOne(0)` 去抢**：抢到的那一瞬间，真正要启动的引擎会把自己判成"已有实例"，
+于是把手里的路径转交出去、自己退出（测试就再也等不到框了）。只看"对象在不在"即可。
+
+老实现是轮询"目标目录还在不在"，于是"点了取消"永远等不到目录消失，只能等 90 秒超时 ——
+界面就一直灰着（用户报的"点测试、取消之后页面还是禁止状态"）。现在恢复耗时实测 **551 ms**。
+
+### 3.10 PowerShell 脚本里的一个陷阱（写测试脚本时会踩）
+
+```powershell
+[void][SomeClass]::SomeMethod(...) 2>$null     # ✗ 整段脚本在"创建管道"阶段就炸
+[void][SomeClass]::SomeMethod(...)             # ✓
+```
+
+`2>$null` 会把前面的**表达式**提升成一个"命令管道"，而 `[void]` 强制转换后得到的是
+`System.Void`，无法再转成管道要的 `System.Object` —— 报错信息是
+`No coercion operator is defined between types 'System.Void' and 'System.Object'`，
+而且**整段脚本一行都不会执行**（连第一行 `Write-Host` 都不会输出），极难定位。
+需要丢掉输出时：要么别加重定向，要么写成 `$null = ...`。
+
 ---
 
 ## 4. 一次右键点击的完整时序（带日志）
@@ -223,13 +266,15 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 01:04:26.817|START n=3                       ← 主实例收到 3 个路径（另两个进程的 START/HANDOFF 各自一行）
 01:04:26.833|HANDOFF n=1                     ← 次要实例把路径交给队列后退出（重复出现若干次）
 01:04:26.901|PRIMARY window=700ms max=8000ms n=1
-01:04:28.059|WINDOW waited=2143ms entries=3  ← 自适应窗口：又等了 2.1 秒，队列里攒到 3 个条目
+01:04:28.059|WINDOW round=1 waited=2143ms entries=3  ← 自适应窗口：又等了 2.1 秒，队列里攒到 3 个条目
 01:04:28.060|BATCH n=3 raw=3                 ← 合并结果：3 项一个批次
 01:04:28.547|CONFIRM yes n=3 files=3 bytes=3 ← 用户点了「永久删除」（n=文件+文件夹总数，files=文件数）
 01:04:28.561|DELETED C:\...\a.txt
 01:04:28.562|DELETED C:\...\b.txt
 01:04:28.571|DELETED C:\...\sub
 01:04:28.580|DONE|ok=3 elapsed=33ms
+01:04:28.990|WINDOW round=2 waited=404ms entries=0  ← 收尾：静默等 0.4 秒确认没有新请求，然后退出
+                                               （这一轮绝不弹窗口；老版本在这里又弹了一次"正在汇总"）
 ```
 
 关键点：
@@ -270,7 +315,7 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 | --- | --- | --- |
 | **加一个选项** | `src/Settings.cs` → `src/MainForm.cs` → `src/MenuRegistry.cs` | `SetupSettings` 加字段 + `Load()/Save()` 的 `switch` 加一个键 → 界面上加一个控件、`ReadUiSettings()` 里读回 → 在写注册表的地方使用它 |
 | **加一个命令/动作** | `src/Commands.cs` | `Options.Parse` 的开关解析 → `Run()` 的 `switch` 加一例 → 实现里记得把明细写进 `Logger`（GUI 走 `--quiet`，没有控制台，出问题只能靠 `setup.log` 复盘） |
-| **界面按钮** | `src/MainForm.cs` | 只调 `Commands.RunElevatedQuiet("...")`，**界面永远不要直接碰注册表**（这样 CLI 与 GUI 走同一条已验证的路径） |
+| **界面按钮** | `src/MainForm.cs` | 只调 `Commands.RunElevatedQuiet("...")`，**界面永远不要直接碰注册表**（这样 CLI 与 GUI 走同一条已验证的路径）。新按钮加进 `LayoutButtonRow(...)` 的参数列表就行，**不要手写坐标**（见 §3.8） |
 | **加一个新的注册位置**（例如「发送到」菜单、桌面背景右键） | `src/AppPaths.cs` + `src/MenuRegistry.cs` | 常量集中在 `AppPaths`（`VerbSubKey` / `StaleVerbSubKeys`）；动词类对"文件+文件夹"是否都生效要先确认 |
 | **加一条运行时安全规则** | `engine/PermanentDelete.ps1` 的路径规整或删除引擎区 | 规整类改动必须同步补 `tests/Test-Engine-Regression.ps1` 的用例 |
 | **换引擎** | `src/Engine.cs` 实现 `IEngine`（`Id`/`DisplayName`/`IsDeployed`/`Deploy`/`Remove`/`BuildVerbCommand`） | 设置项 `Engine=` 已经预留（当前只有 `powershell-vbs`）。记住 §2 的两 exe 规则：引擎 exe **不能**要求管理员 |
@@ -286,7 +331,7 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 powershell -File tests\Test-All.ps1                 # 一条命令跑全套（编码检查 + 三套测试，见下）
 powershell -File tools\Test-Encoding.ps1            # 只跑编码红线检查（BOM / 纯 ASCII / 无个人路径）
 powershell -File tests\Test-SetupExe.ps1            # 49 项：安装器（会真的装/卸，最后恢复现场）
-powershell -File tests\Test-Engine-Regression.ps1   # 67 项：引擎（被测对象是「已部署」的脚本）
+powershell -File tests\Test-Engine-Regression.ps1   # 71 项：引擎（被测对象是「已部署」的脚本）
 powershell -File tests\Test-Engine-E2E.ps1          # 11 项：真实 Shell 动词（会短暂弹出真实确认框）
 ```
 

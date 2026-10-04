@@ -28,6 +28,9 @@
     PERMDEL_MEASURE_MS          = 整数   自动统计的时间预算毫秒（默认 700，0 = 不限）
     PERMDEL_MEASURE_ITEM_LIMIT  = 整数   选中项超过它就直接不统计（默认 300，0 = 不限）
     PERMDEL_MEASURE_ENTRY_LIMIT = 整数   数到这么多条目就停手（默认 20000，0 = 不限）
+    PERMDEL_MERGE_MAX_MS        = 整数   合并窗口硬上限（默认 8000）
+    PERMDEL_MERGE_FEEDBACK_MS   = 整数   "正在汇总"窗口最早在多少毫秒后允许出现（默认 900）
+    PERMDEL_POSTGRACE_MS        = 整数   一批处理完后的静默收尾宽限（默认 400，期间不弹任何窗口）
 #>
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -55,6 +58,13 @@ $MutexName        = 'Local\PermanentDelete.Agent'
 #   固定窗口只能兜住最早那一批，于是出现多个确认框 —— 所以必须自适应。）
 $MergeWindowMs    = if ($env:PERMDEL_MERGE_MS)     { [int]$env:PERMDEL_MERGE_MS }     else { 700 }
 $MergeMaxMs       = if ($env:PERMDEL_MERGE_MAX_MS) { [int]$env:PERMDEL_MERGE_MAX_MS } else { 8000 }
+# "正在汇总选中的项目…"这个进度框什么时候才允许冒头：只有真的在等一批项目
+# （已收到 2 项以上、且已经等了这么久还没到齐）时才弹。单次右键根本不需要它 ——
+# 弹一下再消失，用户会以为程序出了故障。
+$MergeFeedbackMs  = if ($env:PERMDEL_MERGE_FEEDBACK_MS) { [int]$env:PERMDEL_MERGE_FEEDBACK_MS } else { 900 }
+# 一批处理完（用户在确认框上点了确定或取消）之后的"静默收尾宽限"：只等这么一小会儿
+# 看看有没有新请求进来，期间**绝不显示任何窗口**。
+$PostBatchGraceMs = if ($env:PERMDEL_POSTGRACE_MS) { [int]$env:PERMDEL_POSTGRACE_MS } else { 400 }
 $BigFileThreshold = if ($env:PERMDEL_BIG_FILES) { [int]$env:PERMDEL_BIG_FILES } else { 1500 }
 $QueueStaleSec    = 60
 
@@ -257,10 +267,13 @@ function Wait-PDMergeWindow {
         自适应合并窗口：等"再也没有新实例进来"为止。
         - 起始等待 MergeWindowMs；每发现一个新的 .arg 条目，就把截止时间顺延 MergeWindowMs
         - 硬上限 MergeMaxMs，避免异常情况下无限等待
-        - 窗口较长时弹一个"正在汇总"的进度框，不让用户觉得卡住
+        - 只有"一次多选、项目还在陆续到达"（已收到 2 项以上 + 已等过 MergeFeedbackMs）
+          才弹"正在汇总"的进度框；单次右键一律不弹窗，直接就出确认框
+        - -Silent：一个窗口都不许弹（确认框关掉之后的收尾宽限用它 —— 用户刚点完取消，
+          桌面上再跳一个空窗口是最讨嫌的）
         返回：{ Waited = 毫秒, Entries = 窗口结束时的条目数 }
     #>
-    param([int]$BaseMs, [int]$MaxMs)
+    param([int]$BaseMs, [int]$MaxMs, [switch]$Silent)
 
     $sw       = [System.Diagnostics.Stopwatch]::StartNew()
     $deadline = $sw.ElapsedMilliseconds + $BaseMs
@@ -281,11 +294,10 @@ function Wait-PDMergeWindow {
             $seen     = $cur
             $deadline = $now + $BaseMs          # 有新请求进来 → 顺延
         }
-        if (-not $uiShown -and $UseUI -and $now -gt 300) {
-            # 300ms 就冒头：单次右键的等待主要是进程启动 + 合并窗口，
-            # 让用户尽早看到"有反应了"，而不是盯着桌面以为菜单点了没反应。
+        if (-not $Silent -and -not $uiShown -and $UseUI -and $seen -gt 1 -and $now -gt $MergeFeedbackMs) {
             Show-PDProgress -Total 0 -Text ('正在汇总选中的项目… 已收到 ' + $seen + ' 项')
             $uiShown = $true
+            Write-PDLog ("MERGEUI shown seen=" + $seen + " at=" + $now + "ms")
         }
         if ($uiShown) { Step-PDProgress -Text ('正在汇总选中的项目… 已收到 ' + $seen + ' 项') }
         if ($now -ge $MaxMs) { break }
@@ -1115,15 +1127,21 @@ try {
     Write-PDLog ("PRIMARY window=" + $MergeWindowMs + "ms max=" + $MergeMaxMs + "ms n=" + $mine.Count)
 
     try {
-        $first = $true
+        $round = 0
         while ($true) {
-            if ($first) {
+            $round++
+            if ($round -eq 1) {
                 Add-PDQueueEntry -Items $mine     # 先入队，再等合并窗口
-                $first = $false
+                # 自适应窗口：Shell 把一次多选拆成很多次调用时，等它们到齐再弹框
+                $win = Wait-PDMergeWindow -BaseMs $MergeWindowMs -MaxMs $MergeMaxMs
+            } else {
+                # 上一批已经处理完（用户在确认框上点了确定或取消）。
+                # 这里只做一小段**静默**收尾等待，绝不弹窗口：老实现会把整个合并窗口
+                # 再走一遍（而且在 300ms 处冒出"正在汇总选中的项目…"），于是用户刚点完
+                # 取消，桌面上又跳出一个框 —— 用户明确反馈过这个。
+                $win = Wait-PDMergeWindow -BaseMs $PostBatchGraceMs -MaxMs $PostBatchGraceMs -Silent
             }
-            # 自适应窗口：Shell 把一次多选拆成很多次调用时，等它们到齐再弹框
-            $win = Wait-PDMergeWindow -BaseMs $MergeWindowMs -MaxMs $MergeMaxMs
-            Write-PDLog ("WINDOW waited=" + $win.Waited + "ms entries=" + $win.Entries)
+            Write-PDLog ("WINDOW round=" + $round + " waited=" + $win.Waited + "ms entries=" + $win.Entries)
 
             $batch = @(Read-PDQueueEntries)
             if ($batch.Count -eq 0) { break }     # 弹框期间没有新请求 → 收工
