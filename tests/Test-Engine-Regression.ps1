@@ -1,6 +1,6 @@
 ﻿#Requires -Version 5.1
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 2604290100
+# Copyright (C) 2026 mxx1.cn
 <#
     Test-PermanentDelete.ps1 —— 自动化回归测试
 

@@ -357,4 +357,4 @@ powershell -File tests\Test-Engine-E2E.ps1          # 11 项：真实 Shell 动�
 
 ## 9. 许可
 
-本项目以 **GPL-3.0-or-later** 发布，版权署名 `2604290100`。见 [`../LICENSE`](../LICENSE)。
+本项目以 **GPL-3.0-or-later** 发布，版权署名 `mxx1.cn`。见 [`../LICENSE`](../LICENSE)。

@@ -1,6 +1,6 @@
 ﻿#Requires -Version 5.1
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 2604290100
+# Copyright (C) 2026 mxx1.cn
 <#
     PermanentDelete.ps1  —— 右键菜单「永久删除（不进回收站）」主脚本
 

@@ -1,5 +1,5 @@
 ﻿// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 2604290100
+// Copyright (C) 2026 mxx1.cn
 using System;
 using System.Diagnostics;
 using System.IO;

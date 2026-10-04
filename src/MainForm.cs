@@ -1,5 +1,5 @@
 ﻿// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 2604290100
+// Copyright (C) 2026 mxx1.cn
 using System;
 using System.Diagnostics;
 using System.Drawing;
@@ -35,6 +35,9 @@ namespace PDSetup
 
         private readonly IEngine _engine = new PowerShellVbsEngine();
 
+        /// <summary>标题栏与「关于」里用的版本号（形如 1.0.1）。</summary>
+        private readonly string _version;
+
         /// <summary>0 = 空闲，1 = 有后台操作在跑（防止重复点击）。</summary>
         private int _busy;
 
@@ -45,9 +48,10 @@ namespace PDSetup
         public MainForm()
         {
             // 标题带上版本号：用户报问题时能一句话说清自己跑的是哪一版
-            string ver = Application.ProductVersion;   // 形如 1.0.0.0
+            string ver = Application.ProductVersion;   // 形如 1.0.1.0
             string[] parts = ver.Split('.');
             if (parts.Length >= 3) { ver = parts[0] + "." + parts[1] + "." + parts[2]; }
+            _version = ver;
             Text = "永久删除 · 右键菜单管理  v" + ver;
             ClientSize = new Size(760, 580);
             StartPosition = FormStartPosition.CenterScreen;
@@ -178,7 +182,7 @@ namespace PDSetup
 
             Label logLabel = new Label();
             logLabel.Text = "安装器日志（最近）:";
-            logLabel.Location = new Point(12, 350);
+            logLabel.Location = new Point(12, 344);
             logLabel.Size = new Size(160, 20);
             Controls.Add(logLabel);
 
@@ -189,9 +193,27 @@ namespace PDSetup
             _txtLog.WordWrap = false;
             _txtLog.BackColor = Color.White;
             _txtLog.Font = new Font("Consolas", 8.5F);
-            _txtLog.Location = new Point(12, 372);
-            _txtLog.Size = new Size(736, 160);
+            _txtLog.Location = new Point(12, 366);
+            _txtLog.Size = new Size(736, 130);
             Controls.Add(_txtLog);
+
+            // 底部作者信息 + 「关于」按钮（作者、版本、许可证、仓库都在那个窗口里）
+            Label author = new Label();
+            author.Text = "作者：" + AboutForm.AuthorName + "      ·      许可证：" + AboutForm.License;
+            author.ForeColor = Color.DimGray;
+            author.Location = new Point(12, 504);
+            author.Size = new Size(560, 22);
+            Controls.Add(author);
+
+            _btnAbout = new Button();
+            _btnAbout.Text = "关于 / 作者信息";
+            _btnAbout.Location = new Point(610, 500);
+            _btnAbout.Size = new Size(138, 28);
+            _btnAbout.Click += delegate
+            {
+                using (AboutForm dlg = new AboutForm(_version, _engine.Id)) { dlg.ShowDialog(this); }
+            };
+            Controls.Add(_btnAbout);
 
             _statusStrip = new StatusStrip();
             _statusLabel = new ToolStripStatusLabel("就绪");
@@ -200,6 +222,7 @@ namespace PDSetup
         }
 
         private Button _btnRefresh2;
+        private Button _btnAbout;
 
         private static Label MakeLabel(Control parent, int x, int y, int w)
         {

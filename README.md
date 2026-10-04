@@ -57,6 +57,9 @@
 - **操作区**：「添加 / 修复右键菜单」「移除右键菜单」「测试一下」（真的弹一次确认框，验证整条链路）、「打开日志目录」「查看引擎日志」。
 - 下方是安装器日志的最近若干行。GUI 只做展示与按钮，**不直接碰注册表**。
 - **点按钮不会假死**：提权子进程、部署脚本、Shell 动词枚举都在后台线程跑，期间按钮禁用、底部有进度条、状态栏写清在干什么。
+- **底部是作者信息 + 「关于 / 作者信息」按钮**：点开是关于窗口，里面有版本、引擎、许可证、作者与仓库地址（作者 [mxx1.cn](https://mxx1.cn) 可点，会打开浏览器）。
+
+![关于窗口](docs/about-shot.png)
 
 ### 确认框长什么样、为什么有时候数字是 `≥`
 
@@ -203,6 +206,7 @@ permanent-delete-menu/
 ├─ src/                          C# 源码（C# 5 语法，系统自带 csc.exe 编译）
 │   ├─ Program.cs                入口：无参数 → GUI，有参数 → CLI
 │   ├─ MainForm.cs               GUI：状态 + 添加/修复 + 移除 + 测试
+│   ├─ AboutForm.cs              关于窗口（作者 mxx1.cn / 版本 / 许可证 / 仓库）
 │   ├─ Commands.cs               CLI 命令、提权、状态文本
 │   ├─ MenuRegistry.cs           注册表动词读写、隐藏标志与历史项清理、备份
 │   ├─ Engine.cs                 引擎抽象 IEngine + PowerShell/VBS 实现
@@ -231,7 +235,9 @@ permanent-delete-menu/
 
 ## 许可
 
-以 **[GPL-3.0-or-later](LICENSE)** 发布，版权署名 `2604290100`。选 GPL 的原因：这是"写注册表 + 永久删除文件"的工具，**改个名字闭源再分发**是最容易发生的滥用，GPL 要求再分发者必须交出源码（含他自己改的部分）。你可以改它、用它、商用，只要遵守 GPL。
+以 **[GPL-3.0-or-later](LICENSE)** 发布，版权署名 **mxx1.cn**（[https://mxx1.cn](https://mxx1.cn)）；每个源文件头部都有 `SPDX-License-Identifier: GPL-3.0-or-later` 与版权行。选 GPL 的原因：这是"写注册表 + 永久删除文件"的工具，**改个名字闭源再分发**是最容易发生的滥用，GPL 要求再分发者必须交出源码（含他自己改的部分）。你可以改它、用它、商用，只要遵守 GPL。
+
+作者：**[mxx1.cn](https://mxx1.cn)** · 仓库：[2604290100/permanent-delete-menu](https://github.com/2604290100/permanent-delete-menu)
 
 **零第三方依赖**：exe 只用系统自带的 `csc.exe` 编译，引擎只用系统自带的 PowerShell 5.1 与 `wscript.exe`——没有 NuGet 包、没有第三方 exe/dll，所以不存在额外的第三方许可声明。图标与截图均为本项目自行产出。
 

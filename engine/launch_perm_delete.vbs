@@ -1,5 +1,5 @@
 ' SPDX-License-Identifier: GPL-3.0-or-later
-' Copyright (C) 2026 2604290100
+' Copyright (C) 2026 mxx1.cn
 ' launch_perm_delete.vbs
 ' Hidden launcher for PermanentDelete.ps1 (context menu entry point).
 '

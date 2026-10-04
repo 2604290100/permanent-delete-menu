@@ -133,6 +133,12 @@ powershell -File <项目根>\tests\Test-Engine-E2E.ps1
 | `MinimizeBox = false`（与 `MaximizeBox = false` 一起） | `FixedDialog` + `Min=true/Max=false` 时 Windows 在标题栏画一个**灰掉的**最大化方框，夹在最小化和关闭中间，点了没反应 |
 | 界面文字**不用 `✓ ⚠ →` 这类符号** | 微软雅黑没有 `✓`(U+2713) 字形 → 渲染成空白（`【】『』≥…` 正常） |
 
+- **作者信息只从 `src/AboutForm.cs` 的常量取**（`AuthorName` / `AuthorUrl` / `RepoUrl` / `License`）：
+  主界面底部那行和关于窗口都引用它，别在别处硬编码作者名。版权署名是 **mxx1.cn**；
+  `2604290100` 只是 GitHub 账号，只出现在仓库地址里。
+- 验证 GUI 时注意：**模态窗口会让 `SendMessage(BM_CLICK)` 一直阻塞**到窗口关闭
+  （看起来就像"点了没反应"）。要验证按钮弹出对话框，用 `PostMessage`。
+
 - 状态行那几个标签宽度别贪大：给按钮留出右边距，并让按钮 `BringToFront()`。
   判断有没有重叠别靠眼睛 —— 枚举子窗口矩形比一下（`EnumChildWindows` + `GetWindowRect`）。
 - 想确认标题栏按钮只剩一个 ✕：截图后逐行扫像素，别看缩略图（缩略图会骗人）。
