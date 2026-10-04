@@ -54,6 +54,11 @@ $vbs = Join-Path $root 'engine\launch_perm_delete.vbs'
 if (-not (Test-Path $ps1)) { throw ('缺少引擎脚本: ' + $ps1) }
 if (-not (Test-Path $vbs)) { throw ('缺少引擎脚本: ' + $vbs) }
 
+# 免责声明 / 服务条款也以资源形式内嵌（资源名 Disclaimer.md）：界面上的那个窗口
+# 显示的就是仓库里的 docs\DISCLAIMER.md 正文，只有一份正本，不会和文档分叉。
+$md = Join-Path $root 'docs\DISCLAIMER.md'
+if (-not (Test-Path $md)) { throw ('缺少免责声明文档: ' + $md) }
+
 $b = [System.IO.File]::ReadAllBytes($ps1)
 if (-not ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) {
     Write-Warning 'PermanentDelete.ps1 没有 UTF-8 BOM —— PS 5.1 会把中文按 GBK 读错，正在补上'
@@ -91,6 +96,7 @@ $cscArgs = @(
     ('/win32manifest:' + (Join-Path $root 'assets\app.manifest'))
     ('/resource:' + $ps1 + ',PermanentDelete.ps1')
     ('/resource:' + $vbs + ',launch_perm_delete.vbs')
+    ('/resource:' + $md  + ',Disclaimer.md')
     '/reference:System.dll'
     '/reference:System.Core.dll'
     '/reference:System.Drawing.dll'
@@ -111,8 +117,8 @@ Write-Host ('大小: {0:N0} 字节' -f $exe.Length)
 $asm = [System.Reflection.Assembly]::LoadFile($out)
 $names = $asm.GetManifestResourceNames()
 Write-Host ('内嵌资源: ' + ($names -join ', '))
-if (-not ($names -contains 'PermanentDelete.ps1') -or -not ($names -contains 'launch_perm_delete.vbs')) {
-    throw '内嵌资源名不对，引擎文件没进 exe'
+foreach ($need in @('PermanentDelete.ps1', 'launch_perm_delete.vbs', 'Disclaimer.md')) {
+    if (-not ($names -contains $need)) { throw ('内嵌资源里缺少 ' + $need + '（引擎或免责声明没进 exe）') }
 }
 
 # ---- 可选打包 ----

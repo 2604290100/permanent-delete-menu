@@ -68,7 +68,11 @@ namespace PDSetup
             LoadSettingsIntoUi();
             // 首次检测同样放到后台：窗口先出来，状态栏写"正在检测…"，
             // 免得 COM 枚举还没回来时整个窗口是白屏（那是用户最容易觉得"卡住"的一刻）。
-            Shown += delegate { RefreshStatusAsync("正在检测当前状态…", "就绪"); };
+            Shown += delegate
+            {
+                RefreshStatusAsync("正在检测当前状态…", "就绪");
+                StartUpdateCheck();
+            };
         }
 
         // ------------------------------------------------------------------ UI
@@ -197,23 +201,47 @@ namespace PDSetup
             _txtLog.Size = new Size(736, 130);
             Controls.Add(_txtLog);
 
-            // 底部作者信息 + 「关于」按钮（作者、版本、许可证、仓库都在那个窗口里）
+            // 底部：作者署名（简称 mxx1）+ 更新提示 + 「关于」「免责声明」两个按钮。
+            // 注意按钮行仍然走自动排版（LayoutButtonRowRight），不手写坐标 ——
+            // 手写坐标时「打开日志目录」的右边界曾经压进「查看引擎日志」16px。
             Label author = new Label();
-            author.Text = "作者：" + AboutForm.AuthorName + "      ·      许可证：" + AboutForm.License;
+            author.Text = "作者：" + AboutForm.AuthorName + "　·　" + AboutForm.License;
             author.ForeColor = Color.DimGray;
             author.Location = new Point(12, 504);
-            author.Size = new Size(560, 22);
+            author.Size = new Size(220, 22);
             Controls.Add(author);
+
+            // 更新提示：默认隐藏，只有真的查到新版本才出现（点它打开「关于」看详情/下载地址）。
+            _linkUpdate = new LinkLabel();
+            _linkUpdate.Text = "";
+            _linkUpdate.Location = new Point(232, 504);
+            _linkUpdate.Size = new Size(174, 22);
+            _linkUpdate.AutoEllipsis = true;
+            _linkUpdate.Visible = false;
+            _linkUpdate.LinkClicked += delegate
+            {
+                using (AboutForm dlg = new AboutForm(_version, _engine.Id)) { dlg.ShowDialog(this); }
+            };
+            Controls.Add(_linkUpdate);
 
             _btnAbout = new Button();
             _btnAbout.Text = "关于 / 作者信息";
-            _btnAbout.Location = new Point(610, 500);
-            _btnAbout.Size = new Size(138, 28);
             _btnAbout.Click += delegate
             {
                 using (AboutForm dlg = new AboutForm(_version, _engine.Id)) { dlg.ShowDialog(this); }
             };
             Controls.Add(_btnAbout);
+
+            _btnTerms = new Button();
+            _btnTerms.Text = "免责声明 / 服务协议";
+            _btnTerms.Click += delegate
+            {
+                using (DisclaimerForm dlg = new DisclaimerForm()) { dlg.ShowDialog(this); }
+            };
+            Controls.Add(_btnTerms);
+
+            // 右对齐排到客户区右边界 748，两个按钮之间固定 16px 间隙（自动量文字宽度）
+            LayoutButtonRowRight(this, 748, 500, 28, _btnAbout, _btnTerms);
 
             _statusStrip = new StatusStrip();
             _statusLabel = new ToolStripStatusLabel("就绪");
@@ -223,6 +251,8 @@ namespace PDSetup
 
         private Button _btnRefresh2;
         private Button _btnAbout;
+        private Button _btnTerms;
+        private LinkLabel _linkUpdate;
 
         private static Label MakeLabel(Control parent, int x, int y, int w)
         {
@@ -244,6 +274,18 @@ namespace PDSetup
             return b;
         }
 
+        /// <summary>按钮该留多宽：实测文字宽度 + 内边距；Tag 里有备用文案时按更宽的那个留位。</summary>
+        private static int MeasureButton(Button b)
+        {
+            int m = TextRenderer.MeasureText(b.Text, b.Font).Width;
+            string alt = b.Tag as string;
+            if (!string.IsNullOrEmpty(alt))
+            {
+                m = Math.Max(m, TextRenderer.MeasureText(alt, b.Font).Width);
+            }
+            return Math.Max(74, m + 30);
+        }
+
         /// <summary>
         /// 按钮行自动排版：按实测文字宽度定每个按钮的宽，间隙自适应，整体居中。
         /// 这样"改文案"或"加功能"都不会再出现重叠/裁字（手写坐标时踩过两次）。
@@ -256,13 +298,7 @@ namespace PDSetup
             int sum = 0;
             for (int i = 0; i < buttons.Length; i++)
             {
-                int m = TextRenderer.MeasureText(buttons[i].Text, buttons[i].Font).Width;
-                string alt = buttons[i].Tag as string;
-                if (!string.IsNullOrEmpty(alt))
-                {
-                    m = Math.Max(m, TextRenderer.MeasureText(alt, buttons[i].Font).Width);
-                }
-                w[i] = Math.Max(74, m + 30);
+                w[i] = MeasureButton(buttons[i]);
                 sum += w[i];
             }
 
@@ -281,10 +317,71 @@ namespace PDSetup
             }
         }
 
+        /// <summary>
+        /// 与 LayoutButtonRow 同一套量宽逻辑，但**右对齐**：最后一个按钮的右边界正好落在 right 上。
+        /// 底部那行（作者信息 + 更新提示 + 关于 / 免责声明）用它，间隙固定 16px。
+        /// </summary>
+        private static void LayoutButtonRowRight(Control parent, int right, int y, int height, params Button[] buttons)
+        {
+            const int Gap = 16;
+            int[] w = new int[buttons.Length];
+            int sum = 0;
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                w[i] = MeasureButton(buttons[i]);
+                sum += w[i];
+            }
+            int cx = right - sum - Gap * (buttons.Length - 1);
+            if (cx < 0) { cx = 0; }
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                buttons[i].Location = new Point(cx, y);
+                buttons[i].Size = new Size(w[i], height);
+                buttons[i].BringToFront();
+                cx += w[i] + Gap;
+            }
+        }
+
         private void SetStatus(string text)
         {
             _statusLabel.Text = text;
             Logger.Write("gui: " + text);
+        }
+
+        // ------------------------------------------------------------------ 更新检查
+        /// <summary>
+        /// 启动时后台查一次仓库有没有新版本。纯可选功能：失败、被关掉都只写日志，
+        /// 界面上只在"确实有新版"时冒出底部一个小提示（绝不弹窗、绝不阻塞界面）。
+        /// </summary>
+        private void StartUpdateCheck()
+        {
+            if (UpdateCheck.Disabled)
+            {
+                Logger.Write("gui: 更新检查已关闭（PERMDEL_NO_UPDATE）");
+                return;
+            }
+            UpdateCheck.CheckAsync(_version, delegate(UpdateResult r)
+            {
+                try
+                {
+                    if (IsDisposed) { return; }
+                    BeginInvoke((MethodInvoker)delegate { if (!IsDisposed) { ApplyUpdateResult(r); } });
+                }
+                catch (Exception) { }
+            });
+        }
+
+        private void ApplyUpdateResult(UpdateResult r)
+        {
+            if (r == null) { return; }
+            if (r.State == UpdateState.Available)
+            {
+                _linkUpdate.Text = "发现新版本 v" + r.Latest;
+                _linkUpdate.Visible = true;
+                _linkUpdate.BringToFront();
+                SetStatus("有新版本 v" + r.Latest + "（当前 v" + r.Current + "），点底部提示可看详情");
+            }
+            // 其它状态一律不打扰用户（已是最新 / 仓库暂无发布版本 / 网络不通 / 被关掉），只留在日志里
         }
 
         // ------------------------------------------------------------------ 状态

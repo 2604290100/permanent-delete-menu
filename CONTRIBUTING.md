@@ -35,8 +35,9 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 #    在 PowerShell 里用 & 调这个 exe 不会等待也不会返回输出，请看 build.ps1/测试脚本怎么做的
 
 # 3) 跑测试（管理员 PowerShell）
-powershell -File tests\Test-SetupExe.ps1            # 49 项
+powershell -File tests\Test-SetupExe.ps1            # 64 项
 powershell -File tests\Test-Engine-Regression.ps1   # 71 项
+powershell -File tests\Test-Gui.ps1                 # 35 项（界面回归，会短暂开窗口）
 powershell -File tests\Test-Engine-E2E.ps1          # 11 项（会短暂弹真实确认框）
 ```
 
@@ -104,12 +105,13 @@ $b = [System.IO.File]::ReadAllBytes('engine\PermanentDelete.ps1')
 
 ## 5. 测试要求
 
-**提交前必须全绿**（编码检查 + 131 项）。一条命令跑全套（顺序：编码检查 → 安装器 → 引擎回归 → 端到端）：
+**提交前必须全绿**（编码检查 + 181 项）。一条命令跑全套（顺序：编码检查 → 安装器 → 引擎回归 → 界面回归 → 端到端）：
 
 ```powershell
 # 需要管理员 PowerShell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-All.ps1
 #   -SkipE2E   无人桌面（例如 CI runner / 远程会话）时用
+#   -SkipGui   同上：界面回归也必须有桌面会话
 #   -SkipExe   不想动本机已安装的右键菜单时用
 ```
 
@@ -124,16 +126,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Test-Encoding.ps1
 
 | 测试 | 项数 | 前置条件 | 说明 |
 | --- | --- | --- | --- |
-| `tests\Test-SetupExe.ps1` | 49 | 管理员 | 会**真的安装/卸载**，最后把现场恢复成"已安装可用"。会校验部署的引擎文件与工程源码**字节一致**（含 BOM/ASCII 红线） |
-| `tests\Test-Engine-Regression.ps1` | 67 | 管理员 + **先 `install` 一次** | 被测对象是 `%LOCALAPPDATA%\PermanentDelete.ps1`（部署后的副本）；用 `PERMDEL_AUTOCONFIRM` 跳过 UI；全部在 `%TEMP%` 沙箱内 |
+| `tests\Test-SetupExe.ps1` | 64 | 管理员 | 会**真的安装/卸载**，最后把现场恢复成"已安装可用"。会校验部署的引擎文件与工程源码**字节一致**（含 BOM/ASCII 红线）；T12 只测 `checkupdate` / `disclaimer` 里**完全可控、不碰外网**的路径 |
+| `tests\Test-Engine-Regression.ps1` | 71 | 管理员 + **先 `install` 一次** | 被测对象是 `%LOCALAPPDATA%\PermanentDelete.ps1`（部署后的副本）；用 `PERMDEL_AUTOCONFIRM` 跳过 UI；全部在 `%TEMP%` 沙箱内 |
+| `tests\Test-Gui.ps1` | 35 | 管理员 + **交互式桌面** | 枚举子窗口矩形判"按钮/标签有没有压在一起"、读样式位判标题栏、`PostMessage` 真点按钮开「关于」「免责声明」、本机假接口验更新提示。**整套不碰外网** |
 | `tests\Test-Engine-E2E.ps1` | 11 | 管理员 + **交互式桌面** | 走真实 Shell 动词（`FolderItemVerb.DoIt()`），会短暂弹出真实确认框。**无人会话/CI 上跑不了** |
 
-写测试时的两条经验（别重复踩）：
+界面回归与端到端在无桌面会话里都返回**退出码 3 = 环境不满足（跳过）**，`Test-All.ps1` 把它显示成 SKIP —— 不是失败，**别把它改成 0 或 1**。
+
+写测试时的几条经验（别重复踩）：
 
 - 用 `Shell.Application` 枚举动词判断"菜单里到底可不可见"，这是**唯一可信**的判据
   （注册表写对 ≠ 菜单可见）；
 - 点按钮用 `BM_CLICK` 消息，不用 `SendKeys`；关对话框用 `WM_CLOSE(0x0010)`，不用 Esc——
-  确认框是 TopMost，抢不到焦点时按键会丢，"取消"就变成靠运气。
+  确认框是 TopMost，抢不到焦点时按键会丢，"取消"就变成靠运气；
+- **模态窗口开着时 `SendMessage(BM_CLICK)` 会一直阻塞**（直到窗口关掉），测试脚本必须用
+  `PostMessage`，否则看起来就像"点了没反应"；
+- 用管道读子进程输出必须**边跑边读**（`StandardOutput.ReadToEndAsync()`）。管道缓冲区只有
+  4 KB，等 `WaitForExit` 之后再读的话，输出超过 4 KB 就会父子互等到超时；
+- 判界面的"有没有压在一起 / 有没有灰掉的最大化框"要用 **Win32 查询**（矩形、样式位），
+  不要靠截图肉眼判断——缩略图会骗人。现成做法见 `tests\Test-Gui.ps1` 的 §3.14 说明。
 
 改动引擎的规则：
 
@@ -149,12 +160,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\Test-Encoding.ps1
 | --- | --- |
 | 加选项 | `src/Settings.cs`（字段 + `setup.ini` 键）→ `src/MainForm.cs`（一个控件 + `ReadUiSettings`）→ 在 `src/MenuRegistry.cs` 用它写注册表 |
 | 加命令 | `src/Commands.cs`：`Options.Parse` 解析开关 → `Run()` 的 `switch` 加一例 → 实现里把明细写进 `Logger`（GUI 走 `--quiet`，没有控制台，出问题只能靠 `setup.log`） |
-| 加界面按钮 | `src/MainForm.cs`，只调 `Commands.RunElevatedQuiet(...)` |
+| 加界面按钮 | `src/MainForm.cs`，只调 `Commands.RunElevatedQuiet(...)`；底部那一行用 `LayoutButtonRowRight(...)` 排 |
+| 加"关于 / 条款"类窗口 | 新窗口自己写；作者 / 许可证字符串**只从 `src/AboutForm.cs` 的常量取**。条款正文不要写进 C# —— 放 `docs/*.md` 并由 `build.ps1` 内嵌（见 ARCHITECTURE §3.12） |
+| 改更新检查 | `src/UpdateCheck.cs`：保持"只读版本号、失败静默、`PERMDEL_NO_UPDATE=1` 能彻底关掉"三条底线，并同步 `docs/DISCLAIMER.md` §4 |
 | 加新的注册位置 | `src/AppPaths.cs`（常量）+ `src/MenuRegistry.cs` |
 | 换/加引擎 | 实现 `src/Engine.cs` 的 `IEngine`（`Engine=` 设置项已预留；注意 §4.2 的两 exe 规则） |
 | 改引擎行为 | `engine/PermanentDelete.ps1` + 补测试 + 重新编译 |
 
-全套流程：**改代码 → `build.ps1` → 三套测试 → 更新文档（README / `docs/` 里相关的那一篇）**。
+全套流程：**改代码 → `build.ps1` → 四套测试 → 更新文档（README / `docs/` 里相关的那一篇）**。
 
 ---
 

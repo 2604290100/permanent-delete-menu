@@ -91,7 +91,7 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA ^
 2. **可审计性。** 一个"不经过回收站、直接删文件"的工具，用户有权在动手前读完它到底做什么。
    两个纯文本脚本（约 1000 行 PowerShell + 80 行 VBS）可以直接打开看；
    同样的逻辑编译进 exe 就只能信任发布者。
-3. **不重写已验证的东西。** 引擎已有 131 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
+3. **不重写已验证的东西。** 引擎已有 181 项自动化测试覆盖（见 §7）。把引擎改成 C# exe 意味着
    重写合并逻辑、删除引擎和全部 UI 细节并重新验证一遍，收益只有"少两个文件"。
 
 代价（如实记录）：引擎脚本必然落在用户可写目录，存在被同机同用户进程篡改的可能。
@@ -223,8 +223,10 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 | 规则 | 为什么 | 违反后的症状 |
 | --- | --- | --- |
 | 按钮行只用 `LayoutButtonRow()` 排，**不手写坐标** | 按 `TextRenderer.MeasureText` 实测文字宽度定宽、间隙自适应 | 手写坐标时「打开日志目录」右边界压到「查看引擎日志」身上 16 px，两个按钮糊在一起 |
+| 底部那行用 `LayoutButtonRowRight()`（右对齐版，同一套量宽逻辑） | 底部要同时放署名、更新提示、两个按钮，左对齐居中都不合适 | 手写坐标时「关于」与「免责声明」会互相压住 |
 | 标签（`Label`）**绝不能和按钮重叠** | WinForms 里后加进 `Controls` 的控件排在 z 序后面；标签虽然"透明"，但会把按钮那块**重画成背景色**，而且**把鼠标点击也吃掉** | 「重新检测」按钮变成一块空白方框、点它毫无反应（用户报过"右上角那是什么、没反应"） |
 | `MinimizeBox` 必须是 `false` | Win10 下 `FixedDialog` + `Min=true/Max=false` 时，系统会在标题栏画一个**灰掉的**最大化方框 | 标题栏夹着一个不可点的方框（用户报过同一个问题） |
+| 这几个"不许重叠"的规则由 `tests\Test-Gui.ps1` 自动检查（枚举矩形 + 读窗口样式位） | 靠眼睛看截图会骗人，缩略图尤其会 | 改布局后如果压住了，界面回归会直接红（见 §3.14） |
 
 界面状态**不能**用 `✓ ⚠ →` 这类符号：微软雅黑没有 `✓`(U+2713) 的字形，实测渲染成空白。
 文字写中文即可（`【】『』≥…` 都正常）。
@@ -255,6 +257,70 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 `No coercion operator is defined between types 'System.Void' and 'System.Object'`，
 而且**整段脚本一行都不会执行**（连第一行 `Write-Host` 都不会输出），极难定位。
 需要丢掉输出时：要么别加重定向，要么写成 `$null = ...`。
+
+### 3.11 更新检查：只提示，不自动升级（`src/UpdateCheck.cs`）
+
+需求是"装着的版本有没有更新"，但这类功能很容易越界。这里的取舍：
+
+| 决定 | 理由 |
+| --- | --- |
+| **只读版本号，绝不下载 / 替换文件** | 自动升级意味着"写注册表 + 永久删除"的工具能在用户不知情时换掉自己的代码，风险远大于收益 |
+| 只在**界面启动**时查一次（命令行是显式 `checkupdate`） | 引擎（右键删除那条链路）完全不涉及网络：删文件不该依赖网通不通 |
+| 失败一律静默，只写 `setup.log` | 断网/代理/接口限流都不是用户能修的，弹窗只会变成骚扰 |
+| 首选 `releases/latest`，取不到（404 = 仓库还没发版）退到 `tags` | 有新 tag 也能提示；两者都没有就如实报"仓库暂无发布版本" |
+| 版本按点分段比大小，**解析不了就当"没有新版"** | 宁可漏报一次，也不要对着 `v2.0-beta` 之类乱报"有新版本" |
+| 必须有 `PERMDEL_NO_UPDATE=1` 这条"完全不联网"的开关，并写进免责声明 | 用户有权知道并关掉唯一的网络行为（见 §3.12 与 `docs/DISCLAIMER.md` §4） |
+| TLS 1.2 显式设置 + 必带 `User-Agent` | 老 .NET Framework 的默认协议不含 TLS 1.2；GitHub 接口不带 UA 直接 403 |
+
+界面上只有两处呈现：主窗口底部那个**只有真有新版才出现**的小提示，和关于窗口里的更新状态行
+（未检查 / 正在检查 / 已是最新 / 发现新版本 / 仓库暂无发布版本 / 已关闭 / 检查失败）。
+
+### 3.12 免责声明只有一份正本（`docs/DISCLAIMER.md`）
+
+安装器里的「免责声明 / 服务协议」窗口显示的就是仓库里的 `docs/DISCLAIMER.md`：
+
+```text
+docs/DISCLAIMER.md ──build.ps1 /resource:Disclaimer.md──▶ 嵌进 exe
+                                                            │
+                   DisclaimerForm.LoadText() ──轻量 Markdown 清理──▶ 只读文本框
+                   CLI: PermanentDeleteSetup.exe disclaimer ──▶ 控制台
+```
+
+- **不许在 C# 里再抄一份正文**：抄两份必然分叉，而这是一份会被用户当条款读的文档。
+- `build.ps1` 会在编译前确认该文件存在，并在编译后自检内嵌资源里有 `Disclaimer.md`；
+  真的丢了（资源缺失）时 `DisclaimerForm` 还有一份短兜底文本，窗口不会空白。
+- 窗口里显示的是**清理过的纯文本**（去掉 `#`、`**`、反引号，`- ` 变 `· `），
+  文件本身仍是标准 Markdown。
+- 测试：安装器测试 T12 用 `disclaimer` 命令断言正文里写了许可证、`HKLM` 位置、
+  `SHFileOperation`、隐私开关与正本路径；界面回归 A24–A27 再从窗口里读到同样的关键内容。
+
+### 3.13 读子进程输出：管道只有 4 KB，必须边跑边读
+
+```powershell
+$p.Start(); $out = $p.StandardOutput.ReadToEnd(); $p.WaitForExit()   # ✓ 读与跑并行
+$p.Start(); $p.WaitForExit(); $out = $p.StandardOutput.ReadToEnd()   # ✗ 输出 >4 KB 就互等
+```
+
+经典死锁：匿名管道的缓冲区只有 4 KB，子进程写满就阻塞在写调用上；
+父进程又在等子进程退出 —— 双方互等到超时。安装器测试里加 `disclaimer`（正文约 5 KB）
+时**实测踩到**（表现为 `TIMEOUT`，而不是报错）。正确写法是
+`$t = $p.StandardOutput.ReadToEndAsync()`，`WaitForExit()` 之后再取 `$t.Result`。
+`Test-SetupExe.ps1` 与 `Test-Engine-Regression.ps1` 现在都是这个写法。
+
+### 3.14 界面回归测试怎么"看见"布局（`tests/Test-Gui.ps1`）
+
+截图会骗人（缩略图尤其会），所以界面回归一律走 Win32：
+
+| 手段 | 用在哪 |
+| --- | --- |
+| `EnumChildWindows` + `GetWindowRect` | 拿到每个控件的屏幕矩形，两两比交集 —— 按钮之间、标签与按钮之间都必须为空 |
+| "容器排除"启发式 | `GroupBox` 在 WinForms 里也是 `BUTTON` 类窗口，天然"包住"子控件；凡是**完整包住**别人的控件先排除，剩下的才是该互不相交的 |
+| `WM_GETTEXT`（`SendMessageTimeout`） | 跨进程读子控件文字。`GetWindowText` 对别的进程里没有标题的窗口经常返回空串（文本框尤其） |
+| `GetWindowLong(GWL_STYLE)` | 判 `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX`：这才是有没有那个"灰掉的最大化方框"的**根因**，比扫像素稳 |
+| `PostMessage(BM_CLICK)` | 真点按钮。**不能用 `SendMessage`**：模态窗口打开期间它会一直阻塞（看起来像"点了没反应"） |
+| 本机 `HttpListener` 假接口 | 让"有新版时出现提示"这条路径可测：给子进程设 `PERMDEL_UPDATE_URL` 指向本机假接口，返回 `{"tag_name":"v9.9.9"}` —— **整套界面测试不碰外网** |
+
+需要交互式桌面；没有时（CI 的托管 runner）返回**退出码 3 = 跳过**，与端到端测试同一套约定。
 
 ---
 
@@ -320,20 +386,25 @@ VBS 用 `WScript.Shell.Run(cmd, 0, False)` 隐藏控制台（不闪黑窗），�
 | **加一条运行时安全规则** | `engine/PermanentDelete.ps1` 的路径规整或删除引擎区 | 规整类改动必须同步补 `tests/Test-Engine-Regression.ps1` 的用例 |
 | **换引擎** | `src/Engine.cs` 实现 `IEngine`（`Id`/`DisplayName`/`IsDeployed`/`Deploy`/`Remove`/`BuildVerbCommand`） | 设置项 `Engine=` 已经预留（当前只有 `powershell-vbs`）。记住 §2 的两 exe 规则：引擎 exe **不能**要求管理员 |
 | **新增文件位置/日志** | `src/AppPaths.cs` | 与 `%LOCALAPPDATA%` 相关的路径只在这一处定义 |
+| **加一个"关于 / 条款"类窗口** | `src/AboutForm.cs` 或新建 `*Form.cs` | 作者 / 许可证这类字符串**只从 `AboutForm` 的常量取**，别处不许硬编码；窗口按钮加进底部的 `LayoutButtonRowRight(...)`。条款正文属于文档 → 走 `docs/*.md` + 内嵌资源，不要抄进 C#（§3.12） |
+| **改更新检查的行为** | `src/UpdateCheck.cs` | 保持三条底线：只读版本号、失败静默、`PERMDEL_NO_UPDATE=1` 能彻底关掉（§3.11）；改完同步 `docs/DISCLAIMER.md` §4 与 README 的开关说明 |
 
-改动流程见 [`../CONTRIBUTING.md`](../CONTRIBUTING.md)：改完 `build.ps1` → 三套测试全跑。
+改动流程见 [`../CONTRIBUTING.md`](../CONTRIBUTING.md)：改完 `build.ps1` → 四套测试全跑。
 
 ---
 
 ## 7. 测试与验证手段（为什么这些结论可信）
 
 ```powershell
-powershell -File tests\Test-All.ps1                 # 一条命令跑全套（编码检查 + 三套测试，见下）
+powershell -File tests\Test-All.ps1                 # 一条命令跑全套（编码检查 + 四套测试，见下）
 powershell -File tools\Test-Encoding.ps1            # 只跑编码红线检查（BOM / 纯 ASCII / 无个人路径）
-powershell -File tests\Test-SetupExe.ps1            # 49 项：安装器（会真的装/卸，最后恢复现场）
+powershell -File tests\Test-SetupExe.ps1            # 64 项：安装器（会真的装/卸，最后恢复现场）
 powershell -File tests\Test-Engine-Regression.ps1   # 71 项：引擎（被测对象是「已部署」的脚本）
+powershell -File tests\Test-Gui.ps1                 # 35 项：界面回归（枚举子窗口矩形，需交互桌面）
 powershell -File tests\Test-Engine-E2E.ps1          # 11 项：真实 Shell 动词（会短暂弹出真实确认框）
 ```
+
+  **181 项**：64 + 71 + 33 + 11。
 
 - 回归测试被测的是 `%LOCALAPPDATA%\PermanentDelete.ps1`（**部署后**的副本），
   用 `PERMDEL_AUTOCONFIRM` 跳过 UI，全部在 `%TEMP%` 沙箱里做——所以必须先 `install` 一次。
@@ -343,6 +414,8 @@ powershell -File tests\Test-Engine-E2E.ps1          # 11 项：真实 Shell 动�
   注册表写对 ≠ 菜单可见——第三方菜单管理工具的隐藏标志会让它消失。
 - 测试写 UI 时的两条经验：点按钮用 `BM_CLICK` 消息而不是 `SendKeys`（确认框是 TopMost，
   抢不到焦点时按键会丢）；关对话框用 `WM_CLOSE` 而不是 Esc（同理）。
+- 界面回归（`Test-Gui.ps1`）判"布局对不对"靠**枚举矩形**而不是截图，细节见 §3.14；
+  它和端到端一样需要交互式桌面，没有桌面时返回退出码 3（跳过）。
 
 ## 8. 已知限制
 
@@ -351,7 +424,8 @@ powershell -File tests\Test-Engine-E2E.ps1          # 11 项：真实 Shell 动�
 - 合并窗口的硬上限是 8 秒：极端情况（一次选中几百项、机器很慢）下仍有可能分成两批
   （需实测确认）。
 - 不做 ACL 提升、不做句柄强拆、不做回收站（这是工具的目的）。删除**不可恢复**。
-- 未签名、无自动更新、不联网。风险与信任边界详见 [`../SECURITY.md`](../SECURITY.md)。
+- 未签名、**无自动更新**：更新检查只读版本号并给个提示，不下载也不替换文件（§3.11），
+  且可用 `PERMDEL_NO_UPDATE=1` 完全关掉。风险与信任边界详见 [`../SECURITY.md`](../SECURITY.md)。
 
 ---
 

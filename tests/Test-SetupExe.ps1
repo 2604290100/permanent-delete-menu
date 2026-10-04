@@ -5,7 +5,8 @@
     Test-SetupExe.ps1 —— 安装器 exe 的回归测试
 
     覆盖：状态输出 / 卸载 / 安装 / 幂等 / 引擎文件字节一致性（含编码红线）/
-          隐藏标志清除 / 扩展菜单开关 / 历史注册项清理 / Shell 实测可见性。
+          隐藏标志清除 / 扩展菜单开关 / 历史注册项清理 / Shell 实测可见性 /
+          新命令（checkupdate 的可控路径、disclaimer 正文）。
 
     前提：当前会话需要有管理员权限（写 HKLM）；否则 exe 会弹 UAC。
     结束时会把现场恢复成"已正确安装"状态。
@@ -40,7 +41,7 @@ if (-not (Test-Path -LiteralPath $Exe)) { throw ('找不到 exe: ' + $Exe) }
 # 而 Start-Process -PassThru 不加 -Wait 时读不到 ExitCode（PS 5.1 的坑），
 # 所以直接用 ProcessStartInfo。
 function Invoke-Setup {
-    param([string]$ArgLine, [int]$TimeoutSec = 180)
+    param([string]$ArgLine, [int]$TimeoutSec = 180, [hashtable]$Env = $null)
     $si = New-Object System.Diagnostics.ProcessStartInfo
     $si.FileName = $Exe
     $si.Arguments = $ArgLine
@@ -48,14 +49,19 @@ function Invoke-Setup {
     $si.RedirectStandardOutput = $true
     $si.RedirectStandardError = $true
     $si.CreateNoWindow = $true
+    # 需要在"不碰用户环境变量"的前提下临时改 env（更新检查那两个开关就是这么测的）
+    if ($Env) { foreach ($k in $Env.Keys) { $si.EnvironmentVariables[$k] = [string]$Env[$k] } }
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $si
     [void]$p.Start()
+    # 输出必须**边跑边读**：管道缓冲区只有 4KB，`disclaimer` 那种几 KB 的输出如果
+    # 等 WaitForExit 之后再读，子进程会卡在写管道上，双方互等到超时（实测踩过）。
+    $tOut = $p.StandardOutput.ReadToEndAsync()
+    $tErr = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill() } catch { } ; return @{ Code = 'TIMEOUT'; Out = ''; Err = '' } }
-    [void]$p.WaitForExit()
     $out = ''; $err = ''
-    try { $out = $p.StandardOutput.ReadToEnd() } catch { }
-    try { $err = $p.StandardError.ReadToEnd() } catch { }
+    try { $out = $tOut.Result } catch { }
+    try { $err = $tErr.Result } catch { }
     return @{ Code = $p.ExitCode; Out = $out; Err = $err }
 }
 
@@ -247,6 +253,39 @@ $r = Invoke-Setup -ArgLine 'install --quiet'
 $m = Get-StatusMap
 Check 'T11 已恢复安装' ($m['installed'] -eq 'true')
 Check 'T11 菜单可见' (($m['fileVisible'] -eq 'true') -and ($m['folderVisible'] -eq 'true'))
+
+# ---------------------------------------------------------------- T12
+Write-Host 'T12 新命令：更新检查（可控路径）与免责声明'
+# ★这套检查**故意不碰外网**：CI 上匿名访问 GitHub 接口随时可能被限流，
+#   真去比版本号会把 CI 变成"看运气"。这里只锁两条完全可控的路径：
+#   关掉检查（不发任何请求）和接口不可达（指向本机死端口）。
+$r = Invoke-Setup -ArgLine 'checkupdate' -Env @{ PERMDEL_NO_UPDATE = '1' }
+Check 'T12 关掉更新检查时退出码 0（不联网）' ($r.Code -eq 0) ('exit=' + $r.Code)
+Check 'T12 关掉时 update=disabled' ($r.Out -match '(?m)^update=disabled') ('out=' + ($r.Out -replace "`r?`n", ' '))
+Check 'T12 关掉时仍带上当前版本号' ($r.Out -match '(?m)^current=\d+\.\d+\.\d+')
+
+$r = Invoke-Setup -ArgLine 'checkupdate' -Env @{
+    PERMDEL_UPDATE_URL      = 'http://127.0.0.1:9/releases'
+    PERMDEL_UPDATE_TAGS_URL = 'http://127.0.0.1:9/tags'
+    PERMDEL_UPDATE_TIMEOUT_MS = '1500'
+}
+Check 'T12 接口不可达时退出码 1' ($r.Code -eq 1) ('exit=' + $r.Code)
+Check 'T12 接口不可达时 update=error' ($r.Out -match '(?m)^update=error') ('out=' + ($r.Out -replace "`r?`n", ' '))
+Check 'T12 失败原因可读（纯 ASCII，便于脚本判断）' ($r.Out -match '(?m)^detail=(network-error|http-\d+|exception)')
+
+$r = Invoke-Setup -ArgLine 'disclaimer'
+Check 'T12 disclaimer 退出码 0' ($r.Code -eq 0) ('exit=' + $r.Code)
+Check 'T12 disclaimer 有正文（不是空窗口）' ($r.Out.Length -gt 2000) ('len=' + $r.Out.Length)
+Check 'T12 disclaimer 写清了许可证' ($r.Out -match 'GPL-3\.0-or-later')
+Check 'T12 disclaimer 写清了注册表位置与提权' (($r.Out -match 'HKLM') -and ($r.Out -match 'AllFilesystemObjects'))
+Check 'T12 disclaimer 写清了删除用的系统 API' ($r.Out -match 'SHFileOperation')
+Check 'T12 disclaimer 写清了唯一的网络请求与隐私开关' (($r.Out -match 'api\.github\.com') -and ($r.Out -match 'PERMDEL_NO_UPDATE=1'))
+Check 'T12 disclaimer 指向仓库里的正本' ($r.Out -match 'DISCLAIMER\.md')
+$mdPath = Join-Path $ProjectRoot 'docs\DISCLAIMER.md'
+Check 'T12 仓库里 docs\DISCLAIMER.md 存在且非空' ((Test-Path -LiteralPath $mdPath) -and ((Get-Item -LiteralPath $mdPath).Length -gt 2000))
+
+$r = Invoke-Setup -ArgLine 'help'
+Check 'T12 help 里能查到两个新命令' (($r.Out -match 'checkupdate') -and ($r.Out -match 'disclaimer'))
 
 # ---------------------------------------------------------------- 汇总
 Write-Host ''

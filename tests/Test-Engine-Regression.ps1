@@ -136,7 +136,11 @@ function Start-PD {
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $si
     [void]$p.Start()
-    return @{ Proc = $p; ExpectSeconds = $ExpectSeconds; Stdout = ''; Stderr = '' }
+    # 必须**边跑边读**：管道缓冲区只有 4KB，等 WaitForExit 之后再读的话，
+    # 只要被测脚本输出超过这个量，双方就会互等到超时（安装器测试里实测踩过）。
+    return @{ Proc = $p; ExpectSeconds = $ExpectSeconds;
+              OutTask = $p.StandardOutput.ReadToEndAsync(); ErrTask = $p.StandardError.ReadToEndAsync();
+              Stdout = ''; Stderr = '' }
 }
 
 function Wait-PD {
@@ -147,8 +151,8 @@ function Wait-PD {
         return 'TIMEOUT'
     }
     [void]$p.WaitForExit()
-    try { $Handle.Stdout = $p.StandardOutput.ReadToEnd() } catch { }
-    try { $Handle.Stderr = $p.StandardError.ReadToEnd() } catch { }
+    try { $Handle.Stdout = $Handle.OutTask.Result } catch { }
+    try { $Handle.Stderr = $Handle.ErrTask.Result } catch { }
     return $p.ExitCode
 }
 

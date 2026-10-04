@@ -14,11 +14,15 @@ description: Use when working on the "永久删除（不进回收站）" Windows
   build.ps1                      一键编译（用系统自带 csc.exe，不需要 .NET SDK）
   bin\PermanentDeleteSetup.exe   交付物：单文件 GUI+CLI 安装器（引擎脚本已内嵌；不入仓，走 Releases）
   src\*.cs                       C# 源码（C# 5 语法，csc 4.8 编译）
+  src\UpdateCheck.cs             更新检查（只读版本号；PERMDEL_NO_UPDATE=1 可彻底关掉）
+  src\DisclaimerForm.cs          免责声明窗口（正文来自内嵌的 docs\DISCLAIMER.md）
   engine\PermanentDelete.ps1     引擎主脚本（也内嵌进 exe）
   engine\launch_perm_delete.vbs  引擎启动器（也内嵌进 exe）
+  docs\DISCLAIMER.md             免责声明 / 服务协议正本（也内嵌进 exe，资源名 Disclaimer.md）
   tests\Test-All.ps1             一条命令跑完全部测试
-  tests\Test-SetupExe.ps1        安装器测试 49 项
+  tests\Test-SetupExe.ps1        安装器测试 64 项
   tests\Test-Engine-Regression.ps1 引擎回归 71 项
+  tests\Test-Gui.ps1             界面回归 35 项（枚举子窗口矩形，需交互桌面）
   tests\Test-Engine-E2E.ps1      真实 Shell 端到端 11 项（会短暂弹真实确认框）
   tools\Test-Encoding.ps1        编码红线检查（本地与 CI 共用）
 ```
@@ -54,9 +58,15 @@ powershell -ExecutionPolicy Bypass -File <项目根>\build.ps1
 & ...\PermanentDeleteSetup.exe install --quiet --extended      # 只在 Shift 扩展菜单显示
 
 # 三套测试（都用管理员 PowerShell 跑）
-powershell -File <项目根>\tests\Test-SetupExe.ps1
-powershell -File <项目根>\tests\Test-Engine-Regression.ps1
-powershell -File <项目根>\tests\Test-Engine-E2E.ps1
+powershell -File <项目根>\tests\Test-SetupExe.ps1        # 64 项
+powershell -File <项目根>\tests\Test-Engine-Regression.ps1  # 71 项
+powershell -File <项目根>\tests\Test-Gui.ps1             # 35 项（要交互桌面，无人会话返回 3 = 跳过）
+powershell -File <项目根>\tests\Test-Engine-E2E.ps1      # 11 项（会短暂弹真实确认框）
+# 或一次跑全套：tests\Test-All.ps1（无桌面时加 -SkipGui -SkipE2E）
+
+# 更新检查 / 免责声明（只读，不下载不升级）
+& ...\PermanentDeleteSetup.exe checkupdate   # update=latest|available|norerelease|error|disabled
+& ...\PermanentDeleteSetup.exe disclaimer    # 打印免责声明全文
 ```
 
 ## 排障：菜单项看不到 / 点了没反应
@@ -124,24 +134,27 @@ powershell -File <项目根>\tests\Test-Engine-E2E.ps1
 - **GUI 的活不能在 UI 线程上干**：提权子进程（`RunElevatedQuiet`）、部署、`ShellVerify.Check`
   的 COM 枚举都要走 `MainForm.RunBusy`（线程池 + 完成后 `BeginInvoke`），否则点按钮就假死。
 
-## 安装器界面的四条硬规则（全是"看着像 bug"那种坑）
+## 安装器界面的五条硬规则（全是"看着像 bug"那种坑）
 
 | 规则 | 违反后的症状 |
 | --- | --- |
 | 按钮行只用 `MainForm.LayoutButtonRow()` 排，**不手写坐标** | 手写坐标时「打开日志目录」右边界压进「查看引擎日志」16px，两个按钮糊在一起 |
+| 底部那一行用 `MainForm.LayoutButtonRowRight()`（右对齐，同一套量宽逻辑） | 署名、更新提示、「关于」与「免责声明」互相压住 |
 | 标签（`Label`）**绝不能和按钮重叠** | 按钮变成一块空白、点它毫无反应（标签把背景重画了，还吃掉鼠标点击） |
 | `MinimizeBox = false`（与 `MaximizeBox = false` 一起） | `FixedDialog` + `Min=true/Max=false` 时 Windows 在标题栏画一个**灰掉的**最大化方框，夹在最小化和关闭中间，点了没反应 |
 | 界面文字**不用 `✓ ⚠ →` 这类符号** | 微软雅黑没有 `✓`(U+2713) 字形 → 渲染成空白（`【】『』≥…` 正常） |
 
-- **作者信息只从 `src/AboutForm.cs` 的常量取**（`AuthorName` / `AuthorUrl` / `RepoUrl` / `License`）：
-  主界面底部那行和关于窗口都引用它，别在别处硬编码作者名。版权署名是 **mxx1.cn**；
-  `2604290100` 只是 GitHub 账号，只出现在仓库地址里。
-- 验证 GUI 时注意：**模态窗口会让 `SendMessage(BM_CLICK)` 一直阻塞**到窗口关闭
-  （看起来就像"点了没反应"）。要验证按钮弹出对话框，用 `PostMessage`。
+- 这些规则不是靠自觉：`tests\Test-Gui.ps1` 会**枚举子窗口矩形**判重叠、**读 `GWL_STYLE`**
+  判标题栏。改布局后跑一遍它，比看截图可靠（缩略图会骗人）。
+- **作者信息只从 `src/AboutForm.cs` 的常量取**：`AuthorName = "mxx1"`（界面显示的简称）、
+  `AuthorSite = "mxx1.cn"`、`AuthorUrl`、`RepoUrl`、`License`。底部署名只显示 `mxx1`，
+  关于窗口里显示 `mxx1　·　mxx1.cn`（完整域名可点）。版权署名（LICENSE、源码 SPDX 头、
+  `AssemblyCompany`）仍是 **mxx1.cn**；`2604290100` 只是 GitHub 账号，只出现在仓库地址里。
 
-- 状态行那几个标签宽度别贪大：给按钮留出右边距，并让按钮 `BringToFront()`。
-  判断有没有重叠别靠眼睛 —— 枚举子窗口矩形比一下（`EnumChildWindows` + `GetWindowRect`）。
-- 想确认标题栏按钮只剩一个 ✕：截图后逐行扫像素，别看缩略图（缩略图会骗人）。
+- 验证 GUI 时注意：**模态窗口会让 `SendMessage(BM_CLICK)` 一直阻塞**到窗口关闭
+  （看起来就像"点了没反应"）。要验证按钮弹出对话框，用 `PostMessage`（`0x00F5`）。
+- 状态行那几个标签宽度别贪大：给按钮留出右边距，并让按钮 `BringToFront()`；
+  判断有没有重叠别靠眼睛 —— 枚举矩形比一下（`EnumChildWindows` + `GetWindowRect`）。
 
 ## 「测试一下」怎么判断用户已经关掉确认框
 
@@ -167,6 +180,50 @@ powershell -File <项目根>\tests\Test-Engine-E2E.ps1
 而且是在**创建管道阶段**就炸：连脚本第一行 `Write-Host` 都不会输出，`trap` 也不触发，
 极难定位（本仓库写验证脚本时真踩过）。要丢输出就用 `$null = ...`，不要加重定向。
 
+第二个陷阱：**用管道读子进程输出必须边跑边读**。
+
+```powershell
+$p.Start(); $t = $p.StandardOutput.ReadToEndAsync(); $p.WaitForExit(); $out = $t.Result  # ✓
+$p.Start(); $p.WaitForExit(); $out = $p.StandardOutput.ReadToEnd()                      # ✗ 输出 >4KB 互等
+```
+
+管道缓冲区只有 4 KB：子进程写满就阻塞在写调用上，父进程又在等它退出 —— 双方等到超时。
+加 `disclaimer`（正文约 5 KB）时**实测踩到**，表现是 `TIMEOUT` 而不是报错。
+`Test-SetupExe.ps1` / `Test-Engine-Regression.ps1` 现在都用 `ReadToEndAsync`。
+
+## 更新检查与免责声明（改这两块时必须守住的约定）
+
+**更新检查**（`src/UpdateCheck.cs`）：三条底线不能破 —— ①只读版本号，绝不下载 / 替换文件；
+②失败静默（只写 `setup.log`），不弹窗；③`PERMDEL_NO_UPDATE=1` 能彻底关掉（关掉后一个字节都不发）。
+接口地址 / 超时可用 `PERMDEL_UPDATE_URL` / `PERMDEL_UPDATE_TAGS_URL` / `PERMDEL_UPDATE_TIMEOUT_MS`
+覆盖（测试就是靠这个塞本机假接口的）。命令行 `checkupdate` 输出 `update=latest|available|norerelease|error|disabled`。
+引擎（右键删除链路）**永不涉及网络** —— 别把更新检查挪进引擎。
+
+坑：`CheckAsync` 同一时刻只跑一个检查，**在跑期间登记的回调绝不能丢**。老实现遇到"已有检查在跑"
+就直接 return，于是新登记的那个（刚打开的关于窗口）永远收不到结果，界面停在「正在检查…」，
+看起来像卡死。正确做法：把回调挂到正在跑的那次检查上、出结果一起通知；界面上再放一个 500ms 的
+兜底轮询（`AboutForm.PollUpdate`，20 秒还没有结果就显示"检查失败：timeout"）。界面回归 B05/B06 盯着这条。
+
+**免责声明 / 服务协议**：正本只有一份 —— `docs/DISCLAIMER.md`，`build.ps1` 用
+`/resource:…,Disclaimer.md` 内嵌进 exe，`DisclaimerForm` 读它并做轻量 Markdown 清理后显示。
+**绝对不要在 C# 里再抄一份正文**（两份必然分叉，而这是给用户当条款读的文档）。
+改完正文要重新编译，否则窗口里还是旧文本；`build.ps1` 会在编译后自检内嵌资源里有 `Disclaimer.md`。
+
+## 界面回归测试 `tests\Test-Gui.ps1` 怎么用
+
+需要交互式桌面；没有桌面时返回**退出码 3（跳过，不是失败）**。它做四件事：
+
+1. **枚举子窗口矩形**判"按钮之间 / 标签与按钮之间有没有重叠"——`GroupBox` 在 WinForms 里也是
+   `BUTTON` 类窗口，所以先用"是否完整包住别人"把容器排除掉；
+2. **读 `GetWindowLong(GWL_STYLE)`** 判 `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX`（这是"标题栏有没有
+   那个灰掉的最大化方框"的根因，比扫像素稳）；
+3. 用 `PostMessage(BM_CLICK)` 真点「关于」「免责声明」，再用 **`WM_GETTEXT`**（`SendMessageTimeout`）
+   跨进程读子控件文字 —— `GetWindowText` 对别的进程里没有标题的窗口常常返回空串（文本框尤其）；
+4. 起一个 `HttpListener` **本机假接口**（返回 `{"tag_name":"v9.9.9"}`）塞给
+   `PERMDEL_UPDATE_URL`，验证"有新版时底部出现提示"这条路径 —— 整套测试**不碰外网**。
+
+加检查时注意：空的数组从函数返回会被 PowerShell 拆成 `$null`，比较 `.Count` 前先 `@(...)` 包一层。
+
 ## 加新功能的惯例
 
 1. 选项 → `src/Settings.cs` 加字段 + `setup.ini` 键 + `MainForm` 一个控件；
@@ -175,7 +232,10 @@ powershell -File <项目根>\tests\Test-Engine-E2E.ps1
 3. 新的注册表位置/动词 → `src/AppPaths.cs` 的常量 + `src/MenuRegistry.cs`；
 4. 换引擎 → 实现 `src/Engine.cs` 的 `IEngine`（注意：**引擎 exe 不能要求管理员**，
    否则每次右键都弹 UAC；正确形态是"提权安装器 + 不提权引擎"两个 exe）；
-5. 每次改完：`build.ps1` → 三套测试全跑一遍。
+5. 加"关于 / 条款"类窗口 → 作者与许可证字符串只从 `src/AboutForm.cs` 取；条款正文写进
+   `docs/*.md` 并由 `build.ps1` 内嵌，**不要抄进 C#**；
+6. 每次改完：`build.ps1` → 四套测试全跑一遍（无桌面时 `Test-All.ps1 -SkipGui -SkipE2E`），
+   改了界面还要按上面的规则补 `tests\Test-Gui.ps1` 的检查。
 
 ## 安全约定
 

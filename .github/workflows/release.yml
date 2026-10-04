@@ -4,8 +4,8 @@
 # 触发：推送 v* 标签（例如 v1.0.0）
 #
 # 发布前先过一遍闸门，任何一步失败都不会创建 Release（避免放出去一个没过测试的版本）：
-#   编码红线检查 → 编译 + 打包 → 安装器测试（49 项）→ 引擎回归测试（67 项）
-# 端到端测试（11 项）不在这里跑：它需要交互式桌面会话，在 ci.yml 里也是可选的。
+#   编码红线检查 → 编译 + 打包 → 安装器测试（64 项）→ 引擎回归测试（71 项）
+# 界面回归（35 项）与端到端测试（11 项）不在这里跑：它们要交互式桌面会话（真开窗口 / 真弹确认框），
 #
 # 会产出三个附件：
 #   PermanentDeleteSetup.exe          单文件安装器（GUI + 命令行），引擎脚本已内嵌
@@ -65,14 +65,14 @@ jobs:
           Get-Item bin\PermanentDeleteSetup.exe, bin\PermanentDeleteSetup-package.zip |
             Select-Object Name, Length
 
-      - name: 安装器测试（49 项）
+      - name: 安装器测试（64 项）
         # 真的往 HKLM\SOFTWARE\Classes 写动词再删掉，需要管理员（runner 默认就是）。
         # 收尾会把现场恢复成"已正确安装"，同时留下引擎回归测试需要的部署物。
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-SetupExe.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: 引擎回归测试（67 项）
+      - name: 引擎回归测试（71 项）
         # 必须排在安装器测试之后：被测的是 %LOCALAPPDATA% 下已部署的脚本
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Engine-Regression.ps1

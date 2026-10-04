@@ -64,6 +64,9 @@ namespace PDSetup
                 case "uninstall": return Uninstall(o);
                 case "status": return StatusCommand(o);
                 case "verify": return VerifyCommand(o);
+                case "checkupdate":
+                case "check-update": return CheckUpdateCommand(o);
+                case "disclaimer": return DisclaimerCommand(o);
                 case "help":
                 case "?":
                 case "h": return Help();
@@ -175,6 +178,30 @@ namespace PDSetup
             Console.WriteLine("visibleByDesign=" + Bool(v.ExtendedByDesign));
             Console.WriteLine("verifyDetail=" + v.Detail);
             return v.Ok ? 0 : 1;
+        }
+
+        /// <summary>
+        /// 检查仓库有没有新版本。只报告，不下载、不改动任何文件。
+        /// 退出码：0 = 检查完成（含"有新版"）；1 = 检查失败（网络/接口不可用）。
+        /// 结果同时以 key=value 输出，`update=` 的取值见 UpdateResult.StateId。
+        /// </summary>
+        public static int CheckUpdateCommand(Options o)
+        {
+            UpdateResult r = UpdateCheck.Run(UpdateCheck.CurrentVersion);
+            Console.WriteLine("action=checkupdate");
+            Console.WriteLine("update=" + r.StateId);
+            Console.WriteLine("current=" + r.Current);
+            Console.WriteLine("latest=" + r.Latest);
+            Console.WriteLine("url=" + r.Url);
+            Console.WriteLine("detail=" + r.Detail);
+            return r.State == UpdateState.Failed ? 1 : 0;
+        }
+
+        /// <summary>打印免责声明 / 服务条款全文（就是内嵌的 docs\DISCLAIMER.md 正文）。</summary>
+        public static int DisclaimerCommand(Options o)
+        {
+            Console.Write(DisclaimerForm.LoadText());
+            return 0;
         }
 
         /// <summary>key=value 形态的状态文本 —— GUI、测试脚本、命令行共用同一份事实。</summary>
@@ -310,6 +337,8 @@ namespace PDSetup
             Console.WriteLine("  PermanentDeleteSetup.exe                       启动图形界面（推荐）");
             Console.WriteLine("  PermanentDeleteSetup.exe status                输出状态（key=value，含可见性自检）");
             Console.WriteLine("  PermanentDeleteSetup.exe verify                只做菜单可见性自检");
+            Console.WriteLine("  PermanentDeleteSetup.exe checkupdate           检查仓库有没有新版本（只读，不下载不升级）");
+            Console.WriteLine("  PermanentDeleteSetup.exe disclaimer            打印免责声明 / 服务条款全文");
             Console.WriteLine("  PermanentDeleteSetup.exe install [--quiet] [--extended] [--menu-text=文字]");
             Console.WriteLine("  PermanentDeleteSetup.exe uninstall [--quiet]");
             Console.WriteLine("");
@@ -317,6 +346,11 @@ namespace PDSetup
             Console.WriteLine("  * 写入 HKLM\\SOFTWARE\\Classes，需要管理员权限，会自动弹一次 UAC；");
             Console.WriteLine("  * 安装时会自动清除右键菜单管理工具写上的隐藏标志，并实测菜单是否可见；");
             Console.WriteLine("  * 退出码: 0 成功 / 1 有问题 / 2 参数错误 / 5 用户取消了 UAC。");
+            Console.WriteLine("");
+            Console.WriteLine("更新检查（可选，纯只读）:");
+            Console.WriteLine("  * 界面启动时查一次 GitHub 上的最新版本号，只提示、不下载、不自动升级；");
+            Console.WriteLine("  * 设 PERMDEL_NO_UPDATE=1 可完全关掉（关掉后不发起任何网络请求）；");
+            Console.WriteLine("  * PERMDEL_UPDATE_URL / PERMDEL_UPDATE_TAGS_URL / PERMDEL_UPDATE_TIMEOUT_MS 可覆盖接口与超时。");
             return 0;
         }
     }

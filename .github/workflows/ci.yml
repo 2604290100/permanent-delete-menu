@@ -7,18 +7,19 @@
 #   2) 编译 bin\PermanentDeleteSetup.exe 并打 bin\PermanentDeleteSetup-package.zip
 #      （build.ps1 用系统自带的 csc.exe，GitHub 的 windows runner 自带 .NET Framework 4.x，
 #        因此不需要 .NET SDK）
-#   3) 安装器测试 tests\Test-SetupExe.ps1（49 项）
-#   4) 引擎回归测试 tests\Test-Engine-Regression.ps1（67 项）
+#   3) 安装器测试 tests\Test-SetupExe.ps1（64 项）
+#   4) 引擎回归测试 tests\Test-Engine-Regression.ps1（71 项）
 #
 # 为什么 3) 必须排在 4) 前面：
 #   引擎回归测试的被测对象是"部署后"的脚本 —— %LOCALAPPDATA%\PermanentDelete.ps1 与
 #   %LOCALAPPDATA%\launch_perm_delete.vbs，脚本找不到就直接 throw。这两个文件是安装器
 #   部署出来的，而安装器测试在结尾（T11）会把现场恢复成"已正确安装"，正好把部署物留下。
 #
-# 为什么刻意不跑 tests\Test-Engine-E2E.ps1（11 项）：
-#   它要真实弹确认框、用 Shell.Application 枚举真实的右键菜单、还要截屏和取窗口句柄，
-#   GitHub 托管的 runner 是无交互会话，跑必然失败。要跑请用 workflow_dispatch 打开
-#   run_e2e 开关（默认关），并且换成带交互式桌面的自托管 runner。
+# 为什么刻意不跑 tests\Test-Gui.ps1（35 项）与 tests\Test-Engine-E2E.ps1（11 项）：
+#   界面回归要真的开 WinForms 窗口（枚举子窗口矩形、真点按钮），端到端要真的弹确认框并
+#   枚举真实右键菜单，GitHub 托管的 runner 是无交互会话，跑必然失败（脚本自己检测不到
+#   桌面时会返回退出码 3 = 环境不满足）。要用请通过 workflow_dispatch 打开
+#   run_gui / run_e2e 开关（默认关），并换成带交互式桌面的自托管 runner。
 #
 # 权限：本 workflow 只读仓库，不写任何东西，所以 contents: read 就够。
 #
@@ -49,6 +50,11 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      run_gui:
+        description: '额外运行界面回归测试 tests\Test-Gui.ps1（35 项）。它要真的开 WinForms 窗口并枚举子控件，需要交互式桌面会话；GitHub 托管 runner 是无交互会话（脚本会返回退出码 3 = 跳过），只有自托管 runner 才可能通过。'
+        required: false
+        type: boolean
+        default: false
       run_e2e:
         description: '额外运行端到端测试 tests\Test-Engine-E2E.ps1（11 项）。需要交互式桌面会话才能弹确认框和枚举真实右键菜单；GitHub 托管 runner 是无交互会话，必然失败，只有自托管 runner 才可能通过。'
         required: false
@@ -98,19 +104,32 @@ jobs:
           Get-Item bin\PermanentDeleteSetup.exe, bin\PermanentDeleteSetup-package.zip |
             Select-Object Name, Length
 
-      - name: 安装器测试（49 项）
+      - name: 安装器测试（64 项）
         # 会真的把「永久删除（不进回收站）」动词写进 HKLM\SOFTWARE\Classes 再卸载掉，
         # 需要管理员权限；GitHub 的 windows runner 默认就是管理员会话，直接跑即可。
         # 脚本结尾（T11）会重新安装一次，把现场恢复成可用状态，同时留下部署好的引擎脚本。
+        # T12 只测 checkupdate / disclaimer 里完全可控的路径（指向本机死端口 / 关掉检查），
+        # 不依赖外网，所以 CI 上不会因为 GitHub 接口限流而变红。
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-SetupExe.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: 引擎回归测试（67 项）
+      - name: 引擎回归测试（71 项）
         # 被测对象是上一步部署到 %LOCALAPPDATA% 的脚本，所以不能调到安装器测试前面。
         # 测试用 PERMDEL_AUTOCONFIRM 跳过确认框，全部在 %TEMP% 沙箱目录里进行。
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Engine-Regression.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 界面回归测试（可选开关，需要交互式桌面）
+        # 默认关闭。它会真的开 WinForms 窗口、枚举子控件矩形、真点按钮；GitHub 托管 runner
+        # 上没有可交互的桌面会话 —— 那种情况下脚本自己会返回退出码 3（环境不满足），
+        # 这里把 3 当作跳过而不是失败。请在带交互式桌面的自托管 runner 上打开 run_gui 再跑。
+        if: ${{ inputs.run_gui }}
+        timeout-minutes: 10
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-Gui.ps1
+          if ($LASTEXITCODE -eq 3) { Write-Host '[SKIP] no interactive desktop'; exit 0 }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 端到端测试（可选开关，需要交互式桌面）

@@ -8,8 +8,9 @@
 [![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1-5391FE.svg)](docs/ARCHITECTURE.md)
 [![dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#从源码构建)
 
-<!-- CI 只跑编码检查 + 安装器 49 项 + 引擎回归 71 项；端到端 11 项需要交互式桌面，
-     默认不跑（workflow_dispatch 的 run_e2e 开关，且只在自托管 runner 上才可能通过）。 -->
+<!-- CI 只跑编码检查 + 安装器 64 项 + 引擎回归 71 项；界面回归 35 项与端到端 11 项需要
+     交互式桌面，默认不跑（workflow_dispatch 的 run_gui / run_e2e 开关，
+     且只在自托管 runner 上才可能通过）。 -->
 
 ---
 
@@ -57,9 +58,22 @@
 - **操作区**：「添加 / 修复右键菜单」「移除右键菜单」「测试一下」（真的弹一次确认框，验证整条链路）、「打开日志目录」「查看引擎日志」。
 - 下方是安装器日志的最近若干行。GUI 只做展示与按钮，**不直接碰注册表**。
 - **点按钮不会假死**：提权子进程、部署脚本、Shell 动词枚举都在后台线程跑，期间按钮禁用、底部有进度条、状态栏写清在干什么。
-- **底部是作者信息 + 「关于 / 作者信息」按钮**：点开是关于窗口，里面有版本、引擎、许可证、作者与仓库地址（作者 [mxx1.cn](https://mxx1.cn) 可点，会打开浏览器）。
+- **底部是作者信息 + 两个按钮**：署名 `mxx1`（完整站点在关于窗口里），右边是「关于 / 作者信息」和「免责声明 / 服务协议」。
+- **关于窗口**：版本、引擎、许可证、作者与仓库地址（可点，会打开浏览器），外加一行**更新状态**与「检查更新」按钮。
+- **免责声明 / 服务协议**：独立窗口，写清这个工具做什么、用了哪些权限（注册表位置、`%LOCALAPPDATA%` 脚本与日志、删除用的系统 API）以及唯一的网络请求；正文就是仓库里的 [`docs/DISCLAIMER.md`](docs/DISCLAIMER.md)（编译时内嵌进 exe，只有一份正本）。
 
 ![关于窗口](docs/about-shot.png)
+
+![免责声明窗口](docs/disclaimer-shot.png)
+
+### 更新检查（只提示，不自动升级）
+
+界面启动时在后台查一次仓库的最新版本号，**只报告、不下载、不替换文件**：
+
+- 有新版：底部冒出一个小提示「发现新版本 vX.Y.Z」，点它打开关于窗口看详情与下载地址；
+- 没有新版 / 仓库还没发布 / 网络不通：什么都不弹（只写进 `setup.log`），不打扰；
+- 关掉它：设环境变量 `PERMDEL_NO_UPDATE=1`（也认 `true` / `yes` / `on`），关掉后**一个字节都不发**；
+- 想知道细节：命令行 `checkupdate`（见下表），或看 `PERMDEL_UPDATE_URL` / `PERMDEL_UPDATE_TAGS_URL` / `PERMDEL_UPDATE_TIMEOUT_MS`。
 
 ### 确认框长什么样、为什么有时候数字是 `≥`
 
@@ -83,6 +97,8 @@ GUI 按钮走的就是这套命令，所以两者行为一致：
 | `verify` | 只做菜单可见性自检 | 可见时 0，否则 1 |
 | `install` | 部署脚本 + 写动词 + 清隐藏标志 + 清历史项 | 0 成功 / 1 有问题 |
 | `uninstall` | 备份并删除动词键（脚本默认保留） | 0 成功 / 1 有问题 |
+| `checkupdate` | 查仓库有没有新版本（**只读**：不下载、不安装、不改任何文件），输出 `update=latest/available/norerelease/error/disabled` | 检查完成 0 / 检查失败 1 |
+| `disclaimer` | 打印免责声明 / 服务协议全文（与 exe 里那个窗口同一份正文） | 0 |
 | `help` | 打印用法（`h` / `?` 同义；注意 `-h` 不是命令，会被当成未知开关） | 0 |
 
 | 开关 | 作用 |
@@ -131,7 +147,8 @@ Start-Process -FilePath .\bin\PermanentDeleteSetup.exe -ArgumentList 'status' -W
 | 默认安全 | 确认框默认按钮是**取消**（回车 = 取消），系统弹窗默认同样选"否" |
 | 不猜路径 | 参数文件只认 `%TEMP%\permdelete_args_*.pdl`；被空格拆散的路径只在"拼回来确实存在"时才合并 |
 | 删前备份 | 卸载/清理注册表键前 `reg.exe export` 到 `backup-*.reg` |
-| 不越权、不联网 | 失败只报错，不提权不强拆；无任何网络调用与遥测 |
+| 不越权 | 失败只报错，不提权不强拆 |
+| 网络 | 只有**一个可关闭**的更新检查（HTTPS 读 GitHub 公开接口的最新版本号），不下载、不上传、无遥测；`PERMDEL_NO_UPDATE=1` 关掉后完全不联网。详见[免责声明](docs/DISCLAIMER.md) §4 |
 
 日志（排障看第二个），超 2 MB 轮转成 `.1`：
 
@@ -153,6 +170,8 @@ Start-Process -FilePath .\bin\PermanentDeleteSetup.exe -ArgumentList 'status' -W
 **杀软 / HIPS 拦截** —— 无签名，敏感行为必然被拦。把 exe 加信任；引擎侧需放行 `wscript.exe` / `powershell.exe`。→ [§2.3](docs/TROUBLESHOOTING.md)
 
 **卸载后有残留** —— `installed=false`、`staleKeys=` 空、`hideFlags=` 空才算干净。→ [§6](docs/TROUBLESHOOTING.md)
+
+**「关于」里显示"检查失败"** —— 只是本机到 `api.github.com` 不通（代理 / 断网 / 接口限流），**与本工具功能无关**，不用管；想彻底不查就设 `PERMDEL_NO_UPDATE=1`。→ [§7](docs/TROUBLESHOOTING.md)
 
 提 issue 前请先看 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)，并附 `status` 完整输出与日志片段（**贴前把用户名打码**）。
 
@@ -179,24 +198,26 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Package    # 额外打一个
 
 ## 测试
 
-共 **131 项**，一条命令跑完全部（编码检查 → 安装器 → 引擎回归 → 端到端）：
+共 **181 项**，一条命令跑完全部（编码检查 → 安装器 → 引擎回归 → 界面回归 → 端到端）：
 
 ```powershell
 # 需要管理员 PowerShell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\Test-All.ps1
 #   -SkipE2E   无交互桌面时用（CI runner 必须加）
+#   -SkipGui   同上：界面回归也必须有桌面会话
 #   -SkipExe   不想动本机右键菜单时用
 ```
 
 | 套件 | 项数 | 需要 | 测什么 |
 | --- | --- | --- | --- |
 | `tools/Test-Encoding.ps1` | —— | —— | BOM / 纯 ASCII / 合法 UTF-8 / 无本机绝对路径 |
-| `tests/Test-SetupExe.ps1` | 41 | 管理员 | 装/卸/幂等、隐藏标志清除、历史项清理、部署脚本与源码**字节一致**、Shell 实测可见性 |
+| `tests/Test-SetupExe.ps1` | 64 | 管理员 | 装/卸/幂等、隐藏标志清除、历史项清理、部署脚本与源码**字节一致**、Shell 实测可见性、`checkupdate` 的可控路径与 `disclaimer` 正文 |
 | `tests/Test-Engine-Regression.ps1` | 71 | 管理员 + 先装一次 | 多选合并、只读文件、联接点、超长路径、嵌套、盘根拒绝、取消、陈旧队列、伪造参数文件 |
+| `tests/Test-Gui.ps1` | 35 | 管理员 + **交互桌面** | **枚举子窗口矩形**（按钮不重叠、标签不压按钮）、标题栏样式位、真点按钮开「关于」「免责声明」、本机假接口验更新提示（**不碰外网**） |
 | `tests/Test-Engine-E2E.ps1` | 11 | 管理员 + **交互桌面** | 用 `Shell.Application` 触发真实动词，验证"只弹一个框 / 取消不删 / 确认才删" |
 
 - 全部在 `%TEMP%` 沙箱内，不碰真实文件。
-- **端到端会真的弹确认框**，无交互会话里跑不了：[ci.yml](.github/workflows/ci.yml) 只跑编码检查 + 49 + 71 项，端到端请在本地手动跑。
+- **界面回归与端到端都会真的开窗口 / 弹确认框**，无交互会话里跑不了（两者都返回退出码 3 = 跳过，不是失败）：[ci.yml](.github/workflows/ci.yml) 只跑编码检查 + 64 + 71 项。
 - 前置条件与写测试的经验见 [CONTRIBUTING.md](CONTRIBUTING.md) §5。
 
 ## 仓库结构
@@ -206,7 +227,9 @@ permanent-delete-menu/
 ├─ src/                          C# 源码（C# 5 语法，系统自带 csc.exe 编译）
 │   ├─ Program.cs                入口：无参数 → GUI，有参数 → CLI
 │   ├─ MainForm.cs               GUI：状态 + 添加/修复 + 移除 + 测试
-│   ├─ AboutForm.cs              关于窗口（作者 mxx1.cn / 版本 / 许可证 / 仓库）
+│   ├─ AboutForm.cs              关于窗口（作者 / 版本 / 许可证 / 仓库 / 更新检查）
+│   ├─ DisclaimerForm.cs         免责声明窗口（正文来自内嵌的 docs/DISCLAIMER.md）
+│   ├─ UpdateCheck.cs            更新检查（HTTPS + 版本比较，失败静默，可被环境变量关掉）
 │   ├─ Commands.cs               CLI 命令、提权、状态文本
 │   ├─ MenuRegistry.cs           注册表动词读写、隐藏标志与历史项清理、备份
 │   ├─ Engine.cs                 引擎抽象 IEngine + PowerShell/VBS 实现
@@ -218,10 +241,12 @@ permanent-delete-menu/
 ├─ engine/                       引擎真源，内嵌进 exe（改了必须重编）
 │   ├─ PermanentDelete.ps1       主脚本：合并、确认框、删除引擎（UTF-8 带 BOM）
 │   └─ launch_perm_delete.vbs    隐藏控制台启动器（纯 ASCII）
-├─ tests/                        三套测试 + Test-All.ps1 一键跑全套
+├─ tests/                        四套测试 + Test-All.ps1 一键跑全套
+│   ├─ Test-Gui.ps1              界面回归（枚举子窗口矩形，需要交互桌面）
+│   └─ ...                       安装器 / 引擎回归 / 端到端
 ├─ tools/Test-Encoding.ps1       编码红线检查（本地与 CI 共用）
 ├─ assets/                       app.ico / app.manifest（asInvoker，按需提权）
-├─ docs/                         ARCHITECTURE.md、TROUBLESHOOTING.md、界面截图
+├─ docs/                         ARCHITECTURE.md、TROUBLESHOOTING.md、DISCLAIMER.md、界面截图
 ├─ skill/permanent-delete-menu/  DSH skill：排障顺序与开发惯例
 ├─ .github/                      CI / Release 工作流、issue 与 PR 模板
 ├─ build.ps1                     一键编译（含编码检查与内嵌资源自检）
@@ -235,7 +260,9 @@ permanent-delete-menu/
 
 ## 许可
 
-以 **[GPL-3.0-or-later](LICENSE)** 发布，版权署名 **mxx1.cn**（[https://mxx1.cn](https://mxx1.cn)）；每个源文件头部都有 `SPDX-License-Identifier: GPL-3.0-or-later` 与版权行。选 GPL 的原因：这是"写注册表 + 永久删除文件"的工具，**改个名字闭源再分发**是最容易发生的滥用，GPL 要求再分发者必须交出源码（含他自己改的部分）。你可以改它、用它、商用，只要遵守 GPL。
+以 **[GPL-3.0-or-later](LICENSE)** 发布，版权署名 **mxx1.cn**（[https://mxx1.cn](https://mxx1.cn)）；每个源文件头部都有 `SPDX-License-Identifier: GPL-3.0-or-later` 与版权行（界面上按简短形式显示为 `mxx1`）。选 GPL 的原因：这是"写注册表 + 永久删除文件"的工具，**改个名字闭源再分发**是最容易发生的滥用，GPL 要求再分发者必须交出源码（含他自己改的部分）。你可以改它、用它、商用，只要遵守 GPL。
+
+使用前请读 **[免责声明与服务条款](docs/DISCLAIMER.md)**：它逐条说明这个工具做什么、用到哪些权限与系统位置、唯一的网络请求，以及"按原样提供、不提供担保"的责任范围。安装器里也有同名窗口（正文与这份文档是同一份，编译时内嵌进 exe）。
 
 作者：**[mxx1.cn](https://mxx1.cn)** · 仓库：[2604290100/permanent-delete-menu](https://github.com/2604290100/permanent-delete-menu)
 

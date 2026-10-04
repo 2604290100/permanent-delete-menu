@@ -301,7 +301,8 @@ Drive\shell\PermanentDelete
 
 ## 5. 用来排障的测试用环境变量
 
-这些是引擎里的测试钩子，正常使用**不需要**改。排查特定症状时可以临时设：
+这些是引擎与安装器里的测试钩子，正常使用**不需要**改。排查特定症状时可以临时设
+（最后四行是安装器侧的更新检查开关，见 §7）：
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
@@ -316,6 +317,10 @@ Drive\shell\PermanentDelete
 | `PERMDEL_MEASURE_ENTRY_LIMIT` | `20000` | 统计数到这么多条目就停手，`0` = 不限 |
 | `PERMDEL_LOG` | `%LOCALAPPDATA%\PermanentDelete\delete.log` | 换日志文件位置 |
 | `PERMDEL_QUEUE` | `%LOCALAPPDATA%\PermanentDelete\queue` | 换队列目录 |
+| `PERMDEL_NO_UPDATE` | 空 | **安装器侧**：设成 `1`/`true`/`yes`/`on` 就完全关掉更新检查（不发起任何网络请求），见 §7 |
+| `PERMDEL_UPDATE_URL` | GitHub 的 `releases/latest` 接口 | 换更新检查的接口地址（离线镜像 / 测试用） |
+| `PERMDEL_UPDATE_TAGS_URL` | GitHub 的 `tags` 接口 | 上面那个取不到时退而求其次的接口 |
+| `PERMDEL_UPDATE_TIMEOUT_MS` | `6000` | 更新检查的超时（毫秒，允许 500–60000） |
 
 例：想确认"多选分批"是不是窗口太短造成的，临时调大窗口再试一次：
 
@@ -371,9 +376,50 @@ Start-Process -FilePath .\bin\PermanentDeleteSetup.exe -ArgumentList 'verify' -W
 `%LOCALAPPDATA%\PermanentDelete\backup-<时间戳>-<键名>.reg`。
 双击即可导回（需要管理员），也可以先用文本编辑器打开核对里面到底是什么。
 
+正本在仓库的 [`DISCLAIMER.md`](DISCLAIMER.md)，安装器里的同名窗口显示的就是它的正文。
+
 ---
 
-## 7. 仍然解决不了
+## 7. 更新检查（「关于」里显示"检查失败"、底部冒出"发现新版本"）
+
+更新检查是**纯只读**的：查一次 GitHub 上的最新版本号，然后
+
+- 有新版：主窗口底部出现「发现新版本 vX.Y.Z」，点它打开「关于」窗口，里面有下载入口；
+- 已是最新 / 仓库还没发版 / 网络不通：**界面上什么都不显示**，只写一行日志。
+
+所以看到这些情况都不是故障：
+
+| 现象 | 含义 | 怎么办 |
+| --- | --- | --- |
+| 「关于」里显示"检查失败：network-error" | 本机到 `api.github.com` 不通（断网、代理、公司网关拦截） | 与本工具的功能**无关**，忽略即可；不影响安装 / 删除 |
+| 「关于」里显示"检查失败：http-403" | GitHub 匿名接口按 IP 限流（一小时 60 次） | 过一会儿再点「检查更新」 |
+| 「关于」里显示"仓库还没有发布版本" | 仓库既没有 Release 也没有 tag | 正常：还没发版，没有可比的版本号 |
+| 底部一直不出现"发现新版本" | 已是最新版，或者检查被关掉了 | 想看状态就打开「关于」 |
+| 不想让它联网 | —— | 设 `PERMDEL_NO_UPDATE=1`（也认 `true`/`yes`/`on`），关掉后**一个字节都不发** |
+
+命令行自查（会输出 `update=` / `current=` / `latest=` / `url=` / `detail=`）：
+
+```powershell
+Start-Process -FilePath .\bin\PermanentDeleteSetup.exe -ArgumentList 'checkupdate' -Wait -NoNewWindow
+# update=latest / available / norerelease / error / disabled
+# 退出码：0 = 检查完成（含"有新版"）；1 = 检查失败（网络或接口不可用）
+```
+
+相关日志（`%LOCALAPPDATA%\PermanentDelete\setup.log`）里搜 `update-check`：
+
+```text
+update-check state=available current=1.0.1 latest=1.0.2 detail=
+update-check state=error current=1.0.1 latest= detail=network-error
+update-check 已关闭（PERMDEL_NO_UPDATE）
+```
+
+想临时换个接口验证解析逻辑（构建 / 测试时会用，普通用户用不到）：
+`PERMDEL_UPDATE_URL`、`PERMDEL_UPDATE_TAGS_URL`、`PERMDEL_UPDATE_TIMEOUT_MS`。
+界面回归测试就是靠这个把本机假接口塞进去的（见 `tests\Test-Gui.ps1` 的 B 组）。
+
+---
+
+## 8. 仍然解决不了
 
 提 issue 时请附上这些（**不要只写"菜单没有"**，那没法查）：
 
