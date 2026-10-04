@@ -250,6 +250,7 @@ permanent-delete-menu/
 ├─ skill/permanent-delete-menu/  DSH skill：排障顺序与开发惯例
 ├─ .github/                      CI / Release 工作流、issue 与 PR 模板
 ├─ build.ps1                     一键编译（含编码检查与内嵌资源自检）
+├─ AGENTS.md                     给 AI 会话 / 接手者的开场速读（现状、红线、先看哪几份文档）
 ├─ CONTRIBUTING.md               贡献指南（含四条硬性红线）
 ├─ SECURITY.md                   安全策略与信任边界
 ├─ CHANGELOG.md                  更新日志
